@@ -15,3 +15,7 @@ export function getGatewayInfo(): GatewayInfo {
     version: "0.1.0",
   };
 }
+
+export * from "./contracts/driver.js";
+export * from "./contracts/messages.js";
+export * from "./utils/dedup.js";
