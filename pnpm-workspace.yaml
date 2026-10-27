@@ -1,0 +1,8 @@
+overrides:
+  libsignal: "2.0.1"
+
+allowBuilds:
+  '@whiskeysockets/baileys': true
+  esbuild: true
+  protobufjs: true
+  puppeteer: true

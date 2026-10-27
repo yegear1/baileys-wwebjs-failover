@@ -3,14 +3,22 @@
 .env.*
 !.env.example
 
-# High-frequency junk (safe before you pick a stack)
+# Node / TypeScript build artifacts
 node_modules/
-.venv/
-venv/
-__pycache__/
 dist/
 build/
 *.log
+coverage/
+*.tsbuildinfo
+
+# Auth session directories (segregated storage — never commit credentials)
+data/auth/*
+!data/auth/.gitkeep
+data/auth/baileys/*
+!data/auth/baileys/.gitkeep
+data/auth/wwebjs/*
+!data/auth/wwebjs/.gitkeep
+.data/
 
 # OS / IDE / agent scratch
 .DS_Store
@@ -22,20 +30,3 @@ Thumbs.db
 .gemini/
 .claude/
 .maestri/
-*.tsbuildinfo
-
-# Uncomment extras for your stack:
-# --- Python ---
-# *.py[cod]
-# .pytest_cache/
-# .mypy_cache/
-# .ruff_cache/
-# htmlcov/
-# .coverage
-# *.egg-info/
-# --- Node ---
-# .next/
-# .nuxt/
-# .turbo/
-# .parcel-cache/
-# npm-debug.log*

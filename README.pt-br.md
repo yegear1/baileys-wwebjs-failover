@@ -97,6 +97,7 @@ pnpm install          # Instalar dependências
 pnpm test             # Executar suite de testes
 pnpm lint             # Executar verificações de linter e formatação
 pnpm typecheck        # Checagem estrita de tipos TypeScript
+pnpm build            # Compilar projeto para produção
 ```
 
 ## Licença

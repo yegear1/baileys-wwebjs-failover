@@ -97,6 +97,7 @@ pnpm install          # Install dependencies
 pnpm test             # Run test suite
 pnpm lint             # Run linter and formatting checks
 pnpm typecheck        # Strict TypeScript type check
+pnpm build            # Build project for production
 ```
 
 ## License
