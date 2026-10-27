@@ -7,25 +7,26 @@
 
 ## Active Task
 
-### 📌 Task [00.1]: Project Bootstrap, Tooling & Strict TypeScript Stack
+### 📌 Task [01.1]: Common Driver Interface & Resilient Deduplication Schemas
 
-- **Description:** Initialize project package manager (`pnpm`), TypeScript 5.8+ strict ESM configuration, canonical test harness (`vitest`), linter/formatter (`@biomejs/biome`), base production dependencies (`@whiskeysockets/baileys`, `whatsapp-web.js`, `redis`, `zod`, `pino`), directory structure (`src/`, `data/auth/baileys`, `data/auth/wwebjs`), and populate validation commands in `AGENTS.md`.
-- **Systems Involved:** `bootstrap`, `tooling`, `tests`, `runtime`
+- **Description:** Define `IWhatsAppDriver`, unified inbound/outbound message DTOs (`InboundMessage`, `OutboundMessage`, `MessageReceipt`, `EngineStatus`), Zod validation schemas, and the SHA-256 10s-bucket deduplication hash generator.
+- **Systems Involved:** `contracts`, `driver`, `dedup`, `types`
 - **Action Type:**
-  - [x] Read-only / Documentation
+  - [ ] Read-only / Documentation
   - [x] Source code changes
-- **Status:** PLANNING
+- **Status:** READY FOR PLANNING
   *(Workflow: `READY FOR PLANNING` → `PLANNING` on presenting plan → approval → `RUNNING`)*
 
 ### Acceptance Criteria
-- [ ] Node.js 20+ runtime and `pnpm` configured with `package.json` and strict `tsconfig.json` (ESM, strict mode).
-- [ ] Core dependencies specified (`@whiskeysockets/baileys`, `whatsapp-web.js`, `redis`, `zod`, `pino`).
-- [ ] Test harness configured with `vitest` with smoke test suite passing (`pnpm test` exits 0).
-- [ ] Linter and format check configured with `@biomejs/biome` passing (`pnpm lint` exits 0).
+- [ ] Core driver interfaces and status types implemented in `src/contracts/driver.ts`.
+- [ ] Unified inbound/outbound DTOs and Zod validation schemas defined in `src/contracts/messages.ts`.
+- [ ] Deduplication hash algorithm implemented in `src/utils/dedup.ts` ($\text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textBody} \parallel \text{mediaDigest}) + \lfloor\text{timestamp} / 10\rfloor)$).
+- [ ] Unit test suite in `tests/dedup.test.ts` verifying exact hash matching across $\pm 5$s timestamps and distinct message isolation.
+- [ ] Unit test suite in `tests/messages.test.ts` verifying Zod schema parsing and type safety with zero unchecked `any`.
 - [ ] Strict type checking passing with zero `any` (`pnpm typecheck` exits 0).
-- [ ] Project directory scaffolding created (`src/`, `tests/`, `.data/auth/baileys`, `.data/auth/wwebjs`).
-- [ ] Validation commands and guidelines updated in `AGENTS.md`.
-- [ ] `.env.example`, `.gitignore`, and `LICENSE` (MIT) created/updated.
+- [ ] Automated tests passing (`pnpm test` exits 0).
+- [ ] Linter and format checks passing (`pnpm lint` exits 0).
+- [ ] Build passes cleanly (`pnpm build` exits 0).
 
 ---
 
@@ -34,12 +35,12 @@
 | Task | Title | Commit(s) | Date |
 |---|---|---|---|
 | [00.0] | Initial scaffolding (ADD greenfield template) | [`1d2d385`] | 2026-10-27 |
+| [00.1] | Project Bootstrap, Tooling & Strict TypeScript Stack | [`dabe627`] | 2026-10-27 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- [ ] **[01.1]** **Common Driver Interface & Resilient Deduplication Schemas** — Define `IWhatsAppDriver`, unified inbound/outbound DTOs, and SHA-256 10s-bucketed deduplication hash generator.
 - [ ] **[01.2]** **Baileys Primary Engine Adapter** — Implement `@whiskeysockets/baileys` driver with multi-device auth state (`/data/auth/baileys`) and socket lifecycle.
 - [ ] **[01.3]** **WWebJS Standby Engine Adapter & Container Hygiene** — Implement `whatsapp-web.js` driver with cold-start management, `--disable-dev-shm-usage` flags, and process-tree SIGKILL teardown.
 - [ ] **[01.4]** **Failover Orchestrator & Circuit Breaker FSM** — Implement sliding error window, hard fencing, cold-start promotion, and silent probe failback.
