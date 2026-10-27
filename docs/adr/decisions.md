@@ -68,3 +68,55 @@ type: architectural-decision-log
   - *Dual active listeners with client-side deduplication only:* Rejected. Increases network bandwidth and token processing costs in downstream workers.
 - **Consequences:**
   - Redis is a hard requirement for distributed fencing and message deduplication.
+
+---
+
+### [2026-10-27] Resilient Deduplication Hashing with 10-Second Time Buckets and Media Digests
+
+- **Context:**
+  - When both companion devices receive an identical message during an engine switch or reconnection burst, the message timestamps reported by WhatsApp Web and Baileys may differ by 1 to 2 seconds due to network transmission latency.
+  - Furthermore, non-text messages (audio, image, document) lack a direct text body for hash calculation.
+- **Decision:**
+  - Calculate deduplication hashes using a normalized SHA-256 digest:
+    $$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textBody} \parallel \text{mediaDigest}) + \lfloor\text{timestamp} / 10\rfloor)$$
+  - Timestamp grouping into 10-second buckets absorbs cross-device clock jitter while preventing duplicate message ingestion.
+  - Non-text media must use SHA-256 digest of media content or canonical WhatsApp media file SHA-256 identifier.
+- **Alternatives Considered:**
+  - *Strict exact-second timestamp hash:* Rejected due to false-negative deduplication when clock skew exists across sockets.
+  - *WhatsApp Message ID only (`id._serialized`):* Rejected as Baileys and WWebJS occasionally produce divergent client envelope IDs for certain system and forwarded messages.
+- **Consequences:**
+  - Requires normalizing incoming messages into a canonical payload before evaluating deduplication filters.
+
+---
+
+### [2026-10-27] Dual-Session QR Architecture, Independent Auth Storage, and Health Observability
+
+- **Context:**
+  - The gateway operates two companion device connections linked to the same phone number.
+  - Operators must pair each session independently without ambiguity.
+  - Auth sessions must survive container restarts without state corruption or permission conflicts.
+- **Decision:**
+  - Separate QR pairing endpoints into dedicated routes: `GET /qr/baileys` and `GET /qr/wwebjs`, returning raw QR strings or SVG payloads alongside pairing state (`UNPAIRED`, `PAIRING_QR_READY`, `CONNECTED`, `STANDBY`).
+  - Provide a unified `GET /health` endpoint exposing granular health status for both engines individually (`primary_engine`, `standby_engine`, `active_role`).
+  - Store credentials in segregated local volume directories: `/data/auth/baileys` and `/data/auth/wwebjs` with strict filesystem permissions (`0700`).
+- **Alternatives Considered:**
+  - *Single multiplexed /qr endpoint:* Rejected because operators cannot determine which engine session they are scanning.
+- **Consequences:**
+  - Operator onboarding requires two consecutive QR scans during initial provisioning.
+
+---
+
+### [2026-10-27] Containerized Chromium Process Lifecycle, Zombie Mitigation, and Docker Hygiene
+
+- **Context:**
+  - Running Puppeteer / Chromium inside Docker containers carries risk of OOM crashes due to `/dev/shm` exhaustion and zombie processes after `client.destroy()`.
+- **Decision:**
+  - Adopt Docker and Puppeteer execution hygiene aligned with `whatsapp-api`:
+    - Mount `/dev/shm` with minimum 2GB (`shm_size: 2gb`) or pass `--disable-dev-shm-usage`.
+    - Mandatory Chromium flags: `--no-sandbox`, `--disable-setuid-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu`, `--no-first-run`, `--no-zygote`.
+    - Container entrypoint MUST execute through an init supervisor (`tini` or `dumb-init`) to reap zombie processes.
+    - Orchestrator teardown logic MUST execute process tree termination (`process.kill(-pid, 'SIGKILL')`) if Chromium does not exit cleanly within 5 seconds of `client.destroy()`.
+- **Alternatives Considered:**
+  - *Relying solely on `client.destroy()` without process tree kill:* Rejected as Chromium browser processes occasionally linger in orphan state.
+- **Consequences:**
+  - Docker Compose configuration and container images require explicit `init: true` and appropriate volume/flag configurations.

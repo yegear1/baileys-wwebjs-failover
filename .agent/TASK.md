@@ -9,22 +9,23 @@
 
 ### 📌 Task [00.1]: Project Bootstrap, Tooling & Strict TypeScript Stack
 
-- **Description:** Initialize project package manager (`pnpm`), TypeScript 5.8+ strict configuration, canonical test harness (`vitest`), linter/formatter (`eslint` or `biome`), base dependencies (`@whiskeysockets/baileys`, `whatsapp-web.js`, `redis`, `zod`, `pino`), and populate validation commands in `AGENTS.md`.
+- **Description:** Initialize project package manager (`pnpm`), TypeScript 5.8+ strict ESM configuration, canonical test harness (`vitest`), linter/formatter (`@biomejs/biome`), base production dependencies (`@whiskeysockets/baileys`, `whatsapp-web.js`, `redis`, `zod`, `pino`), directory structure (`src/`, `data/auth/baileys`, `data/auth/wwebjs`), and populate validation commands in `AGENTS.md`.
 - **Systems Involved:** `bootstrap`, `tooling`, `tests`, `runtime`
 - **Action Type:**
   - [x] Read-only / Documentation
   - [x] Source code changes
-- **Status:** READY FOR PLANNING
+- **Status:** PLANNING
   *(Workflow: `READY FOR PLANNING` → `PLANNING` on presenting plan → approval → `RUNNING`)*
 
 ### Acceptance Criteria
-- [ ] Node.js 20+ runtime and `pnpm` configured with `package.json` and strict `tsconfig.json`.
+- [ ] Node.js 20+ runtime and `pnpm` configured with `package.json` and strict `tsconfig.json` (ESM, strict mode).
 - [ ] Core dependencies specified (`@whiskeysockets/baileys`, `whatsapp-web.js`, `redis`, `zod`, `pino`).
-- [ ] Test harness configured (`vitest`) with initial smoke test passing (`pnpm test` exits 0).
-- [ ] Linter and format check passing (`pnpm lint` exits 0).
+- [ ] Test harness configured with `vitest` with smoke test suite passing (`pnpm test` exits 0).
+- [ ] Linter and format check configured with `@biomejs/biome` passing (`pnpm lint` exits 0).
 - [ ] Strict type checking passing with zero `any` (`pnpm typecheck` exits 0).
+- [ ] Project directory scaffolding created (`src/`, `tests/`, `.data/auth/baileys`, `.data/auth/wwebjs`).
 - [ ] Validation commands and guidelines updated in `AGENTS.md`.
-- [ ] `.env.example` and `.gitignore` updated with project-specific settings.
+- [ ] `.env.example`, `.gitignore`, and `LICENSE` (MIT) created/updated.
 
 ---
 
@@ -38,13 +39,13 @@
 
 ## Backlog (Upcoming, in priority order)
 
-- [ ] **[01.1]** **Common Driver Interface & Canonical Schemas** — Define `IWhatsAppDriver`, unified inbound/outbound DTOs, and event emitters.
-- [ ] **[01.2]** **Baileys Primary Engine Adapter** — Implement `@whiskeysockets/baileys` driver with multi-device auth state and socket lifecycle.
-- [ ] **[01.3]** **WWebJS Standby Engine Adapter** — Implement `whatsapp-web.js` driver with cold-start management and explicit browser process termination.
-- [ ] **[01.4]** **Failover Orchestrator & Circuit Breaker** — Implement sliding error window, hard fencing, cold-start promotion, and silent probe failback.
-- [ ] **[01.5]** **Standby Maintenance Daemon** — Implement anti-fingerprinting keep-alive cron with jittered schedule (3–5 days) and dynamic text.
-- [ ] **[01.6]** **Redis Queue Integration & Inbound Deduplication** — Connect to `whatsapp:receive:inbox` and `whatsapp:send:priority` with atomic Redis deduplication lock.
-- [ ] **[02.1]** **Dual-Device QR Pairing & Web Health API** — HTTP endpoints for pairing both sessions independently and reporting engine health.
+- [ ] **[01.1]** **Common Driver Interface & Resilient Deduplication Schemas** — Define `IWhatsAppDriver`, unified inbound/outbound DTOs, and SHA-256 10s-bucketed deduplication hash generator.
+- [ ] **[01.2]** **Baileys Primary Engine Adapter** — Implement `@whiskeysockets/baileys` driver with multi-device auth state (`/data/auth/baileys`) and socket lifecycle.
+- [ ] **[01.3]** **WWebJS Standby Engine Adapter & Container Hygiene** — Implement `whatsapp-web.js` driver with cold-start management, `--disable-dev-shm-usage` flags, and process-tree SIGKILL teardown.
+- [ ] **[01.4]** **Failover Orchestrator & Circuit Breaker FSM** — Implement sliding error window, hard fencing, cold-start promotion, and silent probe failback.
+- [ ] **[01.5]** **Standby Maintenance Daemon** — Implement anti-fingerprinting keep-alive cron with jittered schedule (3–5 days), typing presence simulation, and self-chat dispatches.
+- [ ] **[01.6]** **Redis Queue Integration & Deduplication Lock** — Connect to `whatsapp:receive:inbox` and `whatsapp:send:priority` with atomic Redis deduplication lock (`SET NX EX 300`).
+- [ ] **[02.1]** **Dual-Device QR Pairing & Granular Health API** — HTTP endpoints for pairing both sessions independently (`GET /qr/baileys`, `GET /qr/wwebjs`) and reporting multi-engine health (`GET /health`).
 
 ---
 

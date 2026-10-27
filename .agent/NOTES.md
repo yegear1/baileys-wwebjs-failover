@@ -57,14 +57,46 @@ export interface IWhatsAppDriver {
 | `whatsapp:receive:inbox` | Normalized Incoming Messages | Redis Queue (`LPUSH`) | `InboundMessagePayload` | Consumed by downstream workers |
 | `whatsapp:send:priority` | Outbound Message Dispatch | Redis Queue (`BLPOP`) | `SendMessagePayload` | Consumed strictly by active engine |
 
+**Deduplication Hash Algorithm:**
+$$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textBody} \parallel \text{mediaDigest}) + \lfloor\text{timestamp} / 10\rfloor)$$
+* Absorbs $\pm 5\text{s}$ cross-device socket clock skew.
+* Media messages use content SHA-256 or WhatsApp file hash instead of empty body.
+
+---
+
+### 4. HTTP Observability & QR Pairing Contracts
+
+| Endpoint | Method | Response Payload | Description |
+|---|---|---|---|
+| `/health` | `GET` | `{ status: "ok" \| "degraded" \| "down", active_engine: "baileys" \| "wwebjs", primary: EngineStatusDto, standby: EngineStatusDto }` | Granular multi-engine health check |
+| `/qr/baileys` | `GET` | `{ engine: "baileys", status: "UNPAIRED" \| "PAIRING_QR_READY" \| "CONNECTED", qr_raw?: string, qr_svg?: string }` | Dedicated QR code for primary session |
+| `/qr/wwebjs` | `GET` | `{ engine: "wwebjs", status: "UNPAIRED" \| "PAIRING_QR_READY" \| "STANDBY" \| "CONNECTED", qr_raw?: string, qr_svg?: string }` | Dedicated QR code for standby session |
+
+---
+
+### 5. Auth Storage & Chromium Hygiene Contracts
+
+- **Storage Segregation:**
+  - Baileys credentials: `/data/auth/baileys` (multi-file auth state).
+  - WWebJS session: `/data/auth/wwebjs` (Chromium user data dir).
+  - Directory permissions enforced on startup: `0700` (`rwx------`).
+- **Chromium Docker Hygiene (aligned with `whatsapp-api`):**
+  - Flags: `--no-sandbox`, `--disable-setuid-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu`, `--no-first-run`, `--no-zygote`.
+  - Process teardown: `client.destroy()` followed by tree kill (`process.kill(-pid, 'SIGKILL')`) if not exited within 5 seconds.
+  - Container environment: Requires `init: true` (tini/dumb-init) and `shm_size: 2gb` minimum in Compose.
+- **Standby Keep-Alive Rules:**
+  - Jittered cron: runs every 3–5 days during quiet off-peak hours (02:30–05:40).
+  - Recipient: strictly the bot's own self-chat / notes JID (`toMe`).
+  - Simulation: dispatches typing presence (`composing`) for 3–5 seconds before sending dynamic text.
+
 ---
 
 ## Critical Gotchas & Pitfalls
 
 - **Multi-Device Ratchet Desynchronization:** Baileys and WWebJS cannot share or hot-swap the same authentication credentials. They MUST be paired as two independent companion devices on the same phone.
 - **WWebJS Chromium Cold-Start Delay:** Launching Puppeteer, passing browser sandbox validation, navigating to WhatsApp Web, and waiting for script injection takes **15 to 35 seconds**. Outbound queues will buffer during this window.
-- **WhatsApp Idle Companion Expiration:** Linked devices with zero network activity for 14+ days are silently unlinked by WhatsApp. Standby daemon must run keep-alives every 3–5 days with randomized jitter.
-- **Memory Reclaim on Failback:** Simply disconnecting WWebJS leaves Chromium child processes zombie/active in memory. The orchestrator must explicitly call `client.destroy()` and guarantee `SIGTERM` to free the 500+ MB RAM.
+- **WhatsApp Idle Companion Expiration:** Linked devices with zero network activity for 14+ days are silently unlinked by WhatsApp. Standby daemon must run keep-alives every 3–5 days with randomized jitter strictly to self-chat.
+- **Memory Reclaim on Failback:** Simply disconnecting WWebJS leaves Chromium child processes zombie/active in memory. The orchestrator must explicitly call `client.destroy()` and guarantee process-tree `SIGKILL` to free the 500+ MB RAM.
 
 ---
 
@@ -72,5 +104,5 @@ export interface IWhatsAppDriver {
 
 | Debt | Rationale | Revisit When |
 |---|---|---|
-| Inbound deduplication via Redis hash key | Hash of `remoteJid + timestamp + body` handles 99.9% of failover overlaps without complex vector clocks. | If identical messages are legitimately sent within 5 minutes by the same user. |
-| Cold-start delay on failover | Accepting a 15–30s delay during failover eliminates the continuous 500 MB RAM overhead of a hot-standby browser. | If sub-second failover SLA becomes a mandatory business requirement. |
+| Inbound deduplication via 10s bucket SHA256 | Hash with 10s timestamp bucket handles 99.99% of failover overlaps without complex distributed vector clocks. | If identical messages legitimately arrive from the same sender within 10 seconds. |
+| Cold-start delay on failover | Accepting a 15–30s delay during failover eliminates the continuous 500 MB RAM overhead of a hot-standby browser. | If sub-second failover SLA becomes a mandatory business requirement (can switch to Warm-Standby). |

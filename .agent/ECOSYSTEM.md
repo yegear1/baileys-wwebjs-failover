@@ -44,5 +44,6 @@
 | Route / Topic | Consumer(s) | Payload / Schema | Breaking Change Risk | Deprecation Policy |
 | :--- | :--- | :--- | :---: | :--- |
 | `whatsapp:receive:inbox` | `whatsapp-api` (`logic-worker-py`) | `InboundMessagePayload` | **HIGH** | 2 release cycles |
-| `GET /health` | Orchestrators, Docker healthcheck | `{ status, active_engine, standby_status }` | **LOW** | Additive-first |
-| `GET /qr` | Web UI, Admin QR pairing | QR Code SVG / Raw String | **LOW** | Backward-compatible |
+| `GET /health` | Orchestrators, Docker healthcheck | `{ status, active_engine, primary, standby }` | **LOW** | Additive-first |
+| `GET /qr/baileys` | Web UI, Admin QR pairing | `{ engine, status, qr_raw, qr_svg }` | **LOW** | Backward-compatible |
+| `GET /qr/wwebjs` | Web UI, Admin QR pairing | `{ engine, status, qr_raw, qr_svg }` | **LOW** | Backward-compatible |

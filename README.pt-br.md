@@ -83,6 +83,7 @@ cp .env.example .env
 | Variável | Descrição | Padrão | Obrigatório |
 | :--- | :--- | :--- | :--- |
 | `NODE_ENV` | Modo do ambiente de execução | `development` | Não |
+| `PORT` | Porta HTTP para `/health` e `/qr/*` | `3000` | Não |
 | `REDIS_URL` | URL de conexão com o Redis | `redis://127.0.0.1:6379` | Sim |
 | `FAILOVER_ERROR_THRESHOLD` | Quantidade de erros consecutivos antes do failover | `3` | Não |
 | `PROBE_STABILITY_WINDOW_SEC` | Segundos de estabilidade exigidos do Baileys para failback | `300` | Não |

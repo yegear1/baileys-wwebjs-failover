@@ -1,8 +1,8 @@
 # Agent Guidelines and Rules
 
-You are the lead software engineer developing this project: **[PROJECT_NAME]**.
+You are the lead software engineer developing this project: **baileys-wwebjs-failover**.
 
-> **Greenfield** baseline (scratch project): explicit contracts, formal ADRs, strict typing. Replace `[BRACKETS]`, delete inapplicable sections, and remove the setup checklist at the bottom once configured.
+> **Greenfield** baseline: explicit contracts, formal ADRs, strict typing, and falsifiable validation commands.
 
 ---
 
@@ -96,18 +96,18 @@ Not restricted to phase `99.x`. When releasing `vX.Y.Z`:
 
 ---
 
-## Stack (fill in or remove)
+## Stack
 
-- **OS / shell:** `[Bash / PowerShell / Zsh]` — use this syntax in terminal commands.
-- **Architecture:** `[modular monolith / microservices / event-driven]`.
-- **Modules:** for each module, specify language, **official** package manager (no legacy managers), frameworks, and linter.
-- **Persistence / queues:** `[PostgreSQL / Redis / …]`.
+- **OS / shell:** Linux / Bash — use this syntax in terminal commands.
+- **Architecture:** Event-driven active-passive hybrid gateway / microservice.
+- **Modules:** Node.js 20+ (LTS), `pnpm` (package manager), TypeScript 5.8+ (Strict ESM), `@biomejs/biome` (linter/formatter), `vitest` (test harness).
+- **Persistence / queues:** Redis 7+ (fencing lock, priority & inbox queues, deduplication filter) and Segregated Local Volumes (`/data/auth/baileys`, `/data/auth/wwebjs`).
 
 ---
 
-## Docker (remove if project does not use containerization)
+## Docker
 
-Mark **one**: daily runtime via Compose **or** deploy/CI only (native local dev).
+Mark **one**: daily runtime via Compose (and deploy/CI).
 
 Allowed: `up -d`, `logs`, `build <svc>`, `restart`, `exec`, `down` (without `-v`).
 
@@ -120,7 +120,7 @@ Allowed: `up -d`, `logs`, `build <svc>`, `restart`, `exec`, `down` (without `-v`
 
 ## MCP (Model Context Protocol)
 
-List project MCP servers or state `none`. Prefer MCP over ad-hoc scripts. Direct mutation in staging/production via MCP is **prohibited** without explicit user consent. NEVER log auth tokens.
+List project MCP servers: `gemini-api`, `victorialogs`. Prefer MCP over ad-hoc scripts. Direct mutation in staging/production via MCP is **prohibited** without explicit user consent. NEVER log auth tokens.
 
 ---
 
@@ -130,18 +130,19 @@ Read `.agent/skills/<name>/SKILL.md` when a task matches the skill domain. For r
 
 | Skill | Trigger |
 | :--- | :--- |
-| `[skill-name]` | [Workflow trigger and scope (e.g., domain mutations, external sync)] |
+| `readme-standard` | Authoring, auditing, and refactoring repository README files with zero drift. |
+| `docker-compose-hygiene` | Authoring and auditing Docker Compose configurations, healthchecks, and resource boundaries. |
 
 ---
 
-## Validation Commands (fill in real project commands)
+## Validation Commands
 
 Per service:
-- Sync dependencies: `[npm install | poetry install | cargo fetch | go mod download]`
-- Run tests: `[npm test | pytest | cargo test | go test ./...]` (Exit code MUST be 0)
-- Lint / format: `[npm run lint | ruff check | cargo clippy | golangci-lint run]` (Exit code MUST be 0)
-- Typecheck: `[npm run typecheck | mypy | tsc --noEmit]` (Exit code MUST be 0)
-- Build: `[npm run build | cargo build | go build]` (Exit code MUST be 0)
+- Sync dependencies: `pnpm install`
+- Run tests: `pnpm test` (Exit code MUST be 0)
+- Lint / format: `pnpm lint` (Exit code MUST be 0)
+- Typecheck: `pnpm typecheck` (Exit code MUST be 0)
+- Build: `pnpm build` (Exit code MUST be 0)
 
 During **Phase 00.1 (Bootstrap & Setup)**, the agent MUST configure the official, reproducible test harness and validation commands for the language/stack specified by the user (e.g., `npm test` via `"test": "node --test"` or `"test": "vitest run"` in `package.json`, `pytest` via `pyproject.toml`, `cargo test` in `Cargo.toml`, or `go test ./...` in `go.mod`). Adding new dependencies REQUIRES user approval.
 
@@ -265,7 +266,7 @@ await lockResources();
   - `test`: test suite addition/update
   - `chore`: maintenance, dependencies, configs
   - `docs`: documentation only
-- **Branch Strategy:** `[trunk-based on main / feature branches feat|fix/<name>]`.
+- **Branch Strategy:** trunk-based on `main`.
 - **Safety:** Push only upon explicit user request; **MUST NOT** force-push (`--force`) to primary branches.
 
 ---
