@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### 📌 Task [01.3]: WWebJS Standby Engine Adapter & Container Hygiene
+### 📌 Task [01.4]: Failover Orchestrator & Circuit Breaker FSM
 
-- **Description:** Implement `whatsapp-web.js` driver adapter conforming to `IWhatsAppDriver`, including cold-start management, Chromium process-tree hygiene (hard SIGKILL teardown to reclaim ~500MB RAM), `--disable-dev-shm-usage` flags, QR pairing event handling, and message conversion with deduplication hashing.
-- **Systems Involved:** `driver`, `wwebjs`, `chromium`, `contracts`
+- **Description:** Implement the Failover Orchestrator managing runtime finite state machine (`PRIMARY_ACTIVE`, `FENCING`, `COLD_START_STANDBY`, `FALLBACK_ACTIVE`, `MAINTENANCE_KEEPALIVE`, `RECOVERY_SWAP`), sliding error window for trip detection, hard fencing locks, cold-start standby promotion, and silent probe failback.
+- **Systems Involved:** `orchestrator`, `circuit-breaker`, `fsm`, `driver`
 - **Action Type:**
   - [ ] Read-only / Documentation
   - [x] Source code changes
@@ -18,13 +18,12 @@
   *(Workflow: `READY FOR PLANNING` → `PLANNING` on presenting plan → approval → `RUNNING`)*
 
 ### Acceptance Criteria
-- [ ] Implement `WWebJSDriver` class implementing `IWhatsAppDriver` in `src/drivers/wwebjs.ts`.
-- [ ] Secure Chromium profile directory initialization with permissions check on `/data/auth/wwebjs`.
-- [ ] Chromium container hygiene flags configured (`--no-sandbox`, `--disable-setuid-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu`, `--no-first-run`, `--no-zygote`).
-- [ ] Graceful and forceful process-tree teardown (`client.destroy()` followed by SIGKILL if needed) to ensure complete RAM recovery.
-- [ ] Normalized event mapping for QR code, connection states, and inbound messages with deduplication hashing.
-- [ ] Implementation of `sendMessage(to, content)` mapping `OutboundMessage` to WWebJS dispatch API.
-- [ ] Unit and mock tests in `tests/wwebjs.test.ts`.
+- [ ] Implement `FailoverOrchestrator` managing the FSM lifecycle states recorded in `.agent/NOTES.md`.
+- [ ] Implement `CircuitBreaker` sliding failure window (3–5 consecutive failures within configurable window).
+- [ ] Fencing protocol: disconnect and isolate failing engine before promoting standby.
+- [ ] Standby promotion: cold-start `WWebJSDriver.connect()` and buffer outbound queues during startup window.
+- [ ] Silent probe failback: background verification of primary socket stability before draining standby and switching back.
+- [ ] Complete unit and integration tests with deterministic state machine verification.
 - [ ] Strict type checking passing with zero `any` (`pnpm typecheck` exits 0).
 - [ ] Automated tests passing (`pnpm test` exits 0).
 - [ ] Linter and format checks passing (`pnpm lint` exits 0).
@@ -40,12 +39,12 @@
 | [00.1] | Project Bootstrap, Tooling & Strict TypeScript Stack | [`dabe627`] | 2026-10-27 |
 | [01.1] | Common Driver Interface & Resilient Deduplication Schemas | [`90e520e`] | 2026-10-27 |
 | [01.2] | Baileys Primary Engine Adapter & Dedup Hash Integration | [`6ebada6`] | 2026-10-28 |
+| [01.3] | WWebJS Standby Engine Adapter & Container Hygiene | [`bd2aa75`] | 2026-10-28 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- [ ] **[01.4]** **Failover Orchestrator & Circuit Breaker FSM** — Implement sliding error window, hard fencing, cold-start promotion, and silent probe failback.
 - [ ] **[01.5]** **Standby Maintenance Daemon** — Implement anti-fingerprinting keep-alive cron with jittered schedule (3–5 days), typing presence simulation, and self-chat dispatches.
 - [ ] **[01.6]** **Redis Queue Integration & Deduplication Lock** — Connect to `whatsapp:receive:inbox` and `whatsapp:send:priority` with atomic Redis deduplication lock (`SET NX EX 300`).
 - [ ] **[02.1]** **Dual-Device QR Pairing & Granular Health API** — HTTP endpoints for pairing both sessions independently (`GET /qr/baileys`, `GET /qr/wwebjs`) and reporting multi-engine health (`GET /health`).
