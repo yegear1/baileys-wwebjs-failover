@@ -21,4 +21,6 @@ export * from "./contracts/messages.js";
 export * from "./drivers/auth-utils.js";
 export * from "./drivers/baileys.js";
 export * from "./drivers/baileys-mapper.js";
+export * from "./drivers/wwebjs.js";
+export * from "./drivers/wwebjs-mapper.js";
 export * from "./utils/dedup.js";
