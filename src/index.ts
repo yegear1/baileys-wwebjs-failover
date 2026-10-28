@@ -23,4 +23,8 @@ export * from "./drivers/baileys.js";
 export * from "./drivers/baileys-mapper.js";
 export * from "./drivers/wwebjs.js";
 export * from "./drivers/wwebjs-mapper.js";
+export * from "./fsm/circuit-breaker.js";
+export * from "./fsm/fencing.js";
+export * from "./fsm/orchestrator.js";
+export * from "./fsm/types.js";
 export * from "./utils/dedup.js";
