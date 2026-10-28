@@ -43,6 +43,20 @@ class MockWWebJSClient extends EventEmitter implements WWebJSClientInterface {
   public sendMessageMock = vi.fn().mockResolvedValue({
     id: { id: "sent-wweb-msg-id", _serialized: "false_target@c.us_sent-wweb-msg-id" },
   });
+  public sendStateTypingMock = vi.fn().mockResolvedValue(undefined);
+  public clearStateMock = vi.fn().mockResolvedValue(undefined);
+  public sendPresenceAvailableMock = vi.fn().mockResolvedValue(undefined);
+
+  public async getChatById(_chatId: string) {
+    return {
+      sendStateTyping: this.sendStateTypingMock,
+      clearState: this.clearStateMock,
+    };
+  }
+
+  public async sendPresenceAvailable(): Promise<void> {
+    await this.sendPresenceAvailableMock();
+  }
 
   public async initialize(): Promise<void> {
     await this.initializeMock();
@@ -474,6 +488,33 @@ describe("Container Process Hygiene & Teardown", () => {
       expect(killSpy).toHaveBeenCalledWith(expect.any(Number), "SIGKILL");
     } finally {
       killSpy.mockRestore();
+      cleanup();
+    }
+  });
+
+  it("returns self JID from client info when connected", async () => {
+    const { driver, cleanup } = createTestDriver();
+    try {
+      expect(driver.getSelfJid()).toBeUndefined();
+      await driver.connect();
+      expect(driver.getSelfJid()).toBe("bot-phone@c.us");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("dispatches composing and paused presence via chat state", async () => {
+    const { driver, mockClient, cleanup } = createTestDriver();
+    try {
+      await driver.connect();
+      mockClient.emit("ready");
+
+      await driver.sendPresence("5511999998888@c.us", "composing");
+      expect(mockClient.sendStateTypingMock).toHaveBeenCalled();
+
+      await driver.sendPresence("5511999998888@c.us", "paused");
+      expect(mockClient.clearStateMock).toHaveBeenCalled();
+    } finally {
       cleanup();
     }
   });

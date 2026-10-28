@@ -26,22 +26,25 @@ function createMockSocket(): {
   sock: WASocket;
   ev: MockSocketEventEmitter;
   sendMessageMock: ReturnType<typeof vi.fn>;
+  sendPresenceUpdateMock: ReturnType<typeof vi.fn>;
   endMock: ReturnType<typeof vi.fn>;
 } {
   const ev = new MockSocketEventEmitter();
   const sendMessageMock = vi.fn().mockResolvedValue({
     key: { id: "mock-wa-msg-id" },
   });
+  const sendPresenceUpdateMock = vi.fn().mockResolvedValue(undefined);
   const endMock = vi.fn();
 
   const sock = {
     ev: ev as unknown as WASocket["ev"],
-    user: { id: "bot-user@s.whatsapp.net" },
+    user: { id: "bot-user:1@s.whatsapp.net" },
     sendMessage: sendMessageMock,
+    sendPresenceUpdate: sendPresenceUpdateMock,
     end: endMock,
   } as unknown as WASocket;
 
-  return { sock, ev, sendMessageMock, endMock };
+  return { sock, ev, sendMessageMock, sendPresenceUpdateMock, endMock };
 }
 
 describe("ensureSecureAuthDirectory", () => {
@@ -371,6 +374,63 @@ describe("BaileysDriver", () => {
 
       expect(driver.getStatus().state).toBe("UNPAIRED");
       expect(driver.getStatus().connected).toBe(false);
+    } finally {
+      await driver.disconnect();
+      rmSync(tempParent, { recursive: true, force: true });
+    }
+  });
+
+  it("returns normalized self JID stripping device suffixes", async () => {
+    const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-self-"));
+    const authDir = join(tempParent, "creds");
+    const { sock } = createMockSocket();
+
+    const driver = new BaileysDriver({
+      authDir,
+      authStateLoader: vi.fn().mockResolvedValue({
+        state: {} as AuthenticationState,
+        saveCreds: vi.fn(),
+      }),
+      socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+        config: UserFacingSocketConfig,
+      ) => WASocket,
+    });
+
+    try {
+      expect(driver.getSelfJid()).toBeUndefined();
+      await driver.connect();
+      expect(driver.getSelfJid()).toBe("bot-user@s.whatsapp.net");
+    } finally {
+      await driver.disconnect();
+      rmSync(tempParent, { recursive: true, force: true });
+    }
+  });
+
+  it("dispatches presence update through socket", async () => {
+    const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-presence-"));
+    const authDir = join(tempParent, "creds");
+    const { sock, ev, sendPresenceUpdateMock } = createMockSocket();
+
+    const driver = new BaileysDriver({
+      authDir,
+      authStateLoader: vi.fn().mockResolvedValue({
+        state: {} as AuthenticationState,
+        saveCreds: vi.fn(),
+      }),
+      socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+        config: UserFacingSocketConfig,
+      ) => WASocket,
+    });
+
+    try {
+      await driver.connect();
+      ev.emit("connection.update", { connection: "open" });
+
+      await driver.sendPresence("5511999998888@s.whatsapp.net", "composing");
+      expect(sendPresenceUpdateMock).toHaveBeenCalledWith(
+        "composing",
+        "5511999998888@s.whatsapp.net",
+      );
     } finally {
       await driver.disconnect();
       rmSync(tempParent, { recursive: true, force: true });

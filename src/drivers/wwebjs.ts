@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import pkg from "whatsapp-web.js";
-import type { EngineStatus, IWhatsAppDriver } from "../contracts/driver.js";
+import type { EngineStatus, IWhatsAppDriver, PresenceState } from "../contracts/driver.js";
 import type { InboundMessage, MessageReceipt, OutboundMessage } from "../contracts/messages.js";
 import { logger as defaultLogger } from "../index.js";
 import { ensureSecureAuthDirectory } from "./auth-utils.js";
@@ -23,6 +23,11 @@ export const DEFAULT_CHROMIUM_FLAGS = [
   "--no-zygote",
 ];
 
+export interface WWebJSChatInterface {
+  sendStateTyping?: () => Promise<void>;
+  clearState?: () => Promise<void>;
+}
+
 export interface WWebJSClientInterface {
   info?: {
     wid?: {
@@ -42,6 +47,8 @@ export interface WWebJSClientInterface {
     content: unknown,
     options?: unknown,
   ): Promise<{ id?: { id?: string; _serialized?: string } }>;
+  sendPresenceAvailable?: () => Promise<void>;
+  getChatById?: (chatId: string) => Promise<WWebJSChatInterface>;
   on(event: string, listener: (...args: unknown[]) => void): this;
 }
 
@@ -97,6 +104,33 @@ export class WWebJSDriver implements IWhatsAppDriver {
 
   public getQrCode(): string | undefined {
     return this.qrCode;
+  }
+
+  public getSelfJid(): string | undefined {
+    return this.client?.info?.wid?._serialized;
+  }
+
+  public async sendPresence(to: string, state: PresenceState): Promise<void> {
+    if (!this.client || !this.status.connected) {
+      throw new Error("Cannot send presence: WWebJS driver is not connected");
+    }
+
+    const targetChatId = toWWebJSChatId(to);
+
+    try {
+      if (this.client.getChatById) {
+        const chat = await this.client.getChatById(targetChatId);
+        if (state === "composing") {
+          await chat.sendStateTyping?.();
+        } else {
+          await chat.clearState?.();
+        }
+      } else if (state === "composing" && this.client.sendPresenceAvailable) {
+        await this.client.sendPresenceAvailable();
+      }
+    } catch (err) {
+      this.logger.warn({ err, to, state }, "Failed to send presence state in WWebJS");
+    }
   }
 
   public onMessage(handler: (msg: InboundMessage) => Promise<void>): void {

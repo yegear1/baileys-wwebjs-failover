@@ -27,4 +27,8 @@ export * from "./fsm/circuit-breaker.js";
 export * from "./fsm/fencing.js";
 export * from "./fsm/orchestrator.js";
 export * from "./fsm/types.js";
+export * from "./maintenance/daemon.js";
+export * from "./maintenance/jitter.js";
+export * from "./maintenance/payload.js";
+export * from "./maintenance/types.js";
 export * from "./utils/dedup.js";

@@ -73,6 +73,14 @@ export class FailoverOrchestrator {
     return this.activeEngine;
   }
 
+  getPrimaryDriver(): IWhatsAppDriver {
+    return this.primary;
+  }
+
+  getStandbyDriver(): IWhatsAppDriver {
+    return this.standby;
+  }
+
   getSnapshot(): FailoverSnapshot {
     return {
       state: this.state,

@@ -21,6 +21,8 @@ export interface EngineStatus {
   readonly error?: string;
 }
 
+export type PresenceState = "composing" | "paused";
+
 /**
  * Common driver contract for WhatsApp engines (Baileys and WhatsApp-Web.js).
  *
@@ -32,6 +34,8 @@ export interface IWhatsAppDriver {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   sendMessage(to: string, content: OutboundMessage): Promise<MessageReceipt>;
+  sendPresence?(to: string, state: PresenceState): Promise<void>;
+  getSelfJid?(): string | undefined;
   onMessage(handler: (msg: InboundMessage) => Promise<void>): void;
   onStatusChange(handler: (status: EngineStatus) => void): void;
   getStatus(): EngineStatus;

@@ -8,7 +8,7 @@ import makeWASocket, {
   type WASocket,
 } from "@whiskeysockets/baileys";
 import type { Logger } from "pino";
-import type { EngineStatus, IWhatsAppDriver } from "../contracts/driver.js";
+import type { EngineStatus, IWhatsAppDriver, PresenceState } from "../contracts/driver.js";
 import type { InboundMessage, MessageReceipt, OutboundMessage } from "../contracts/messages.js";
 import { logger as defaultLogger } from "../index.js";
 import { ensureSecureAuthDirectory } from "./auth-utils.js";
@@ -71,6 +71,25 @@ export class BaileysDriver implements IWhatsAppDriver {
 
   public getQrCode(): string | undefined {
     return this.qrCode;
+  }
+
+  public getSelfJid(): string | undefined {
+    const rawId = this.socket?.user?.id;
+    if (!rawId) return undefined;
+    return rawId.replace(/:.*@/, "@");
+  }
+
+  public async sendPresence(to: string, state: PresenceState): Promise<void> {
+    if (!this.socket || !this.status.connected) {
+      throw new Error("Cannot send presence: Baileys driver is not connected");
+    }
+
+    const targetJid = this.normalizeJid(to);
+    try {
+      await this.socket.sendPresenceUpdate(state, targetJid);
+    } catch (err) {
+      this.logger.warn({ err, to, state }, "Failed to send presence update in Baileys");
+    }
   }
 
   public onMessage(handler: (msg: InboundMessage) => Promise<void>): void {
