@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### 📌 Task [01.4]: Failover Orchestrator & Circuit Breaker FSM
+### 📌 Task [01.5]: Standby Maintenance Daemon
 
-- **Description:** Implement the Failover Orchestrator managing runtime finite state machine (`PRIMARY_ACTIVE`, `FENCING`, `COLD_START_STANDBY`, `FALLBACK_ACTIVE`, `MAINTENANCE_KEEPALIVE`, `RECOVERY_SWAP`), sliding error window for trip detection, hard fencing locks, cold-start standby promotion, and silent probe failback.
-- **Systems Involved:** `orchestrator`, `circuit-breaker`, `fsm`, `driver`
+- **Description:** Implement the Standby Maintenance Daemon running an anti-fingerprinting keep-alive scheduler with randomized jitter (3–5 days) during quiet hours (02:30–05:40), simulated typing presence, dynamic self-chat dispatches, and teardown releasing Chromium memory.
+- **Systems Involved:** `maintenance`, `daemon`, `orchestrator`, `driver`
 - **Action Type:**
   - [ ] Read-only / Documentation
   - [x] Source code changes
@@ -18,12 +18,13 @@
   *(Workflow: `READY FOR PLANNING` → `PLANNING` on presenting plan → approval → `RUNNING`)*
 
 ### Acceptance Criteria
-- [ ] Implement `FailoverOrchestrator` managing the FSM lifecycle states recorded in `.agent/NOTES.md`.
-- [ ] Implement `CircuitBreaker` sliding failure window (3–5 consecutive failures within configurable window).
-- [ ] Fencing protocol: disconnect and isolate failing engine before promoting standby.
-- [ ] Standby promotion: cold-start `WWebJSDriver.connect()` and buffer outbound queues during startup window.
-- [ ] Silent probe failback: background verification of primary socket stability before draining standby and switching back.
-- [ ] Complete unit and integration tests with deterministic state machine verification.
+- [ ] Implement `StandbyMaintenanceDaemon` managing scheduled keep-alive cycles for WWebJS.
+- [ ] Jittered scheduling: triggers every 3 to 5 days at randomized off-peak windows (02:30–05:40 local time).
+- [ ] Typing presence simulation: dispatches `composing` state for 3–5 seconds before dispatching text.
+- [ ] Dynamic payload generation: generates non-repeating dynamic messages targeted strictly to self-chat (`toMe`).
+- [ ] Coordinates with `FailoverOrchestrator` via `enterMaintenanceKeepalive()` and `exitMaintenanceKeepalive()`.
+- [ ] Verifies clean teardown of Chromium child processes upon cycle completion.
+- [ ] Unit and integration tests covering scheduling jitter, self-chat dispatch, typing delay, and orchestrator integration.
 - [ ] Strict type checking passing with zero `any` (`pnpm typecheck` exits 0).
 - [ ] Automated tests passing (`pnpm test` exits 0).
 - [ ] Linter and format checks passing (`pnpm lint` exits 0).
@@ -40,12 +41,12 @@
 | [01.1] | Common Driver Interface & Resilient Deduplication Schemas | [`90e520e`] | 2026-10-27 |
 | [01.2] | Baileys Primary Engine Adapter & Dedup Hash Integration | [`6ebada6`] | 2026-10-28 |
 | [01.3] | WWebJS Standby Engine Adapter & Container Hygiene | [`bd2aa75`] | 2026-10-28 |
+| [01.4] | Failover Orchestrator & Circuit Breaker FSM | [`eb3d96b`] | 2026-10-28 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- [ ] **[01.5]** **Standby Maintenance Daemon** — Implement anti-fingerprinting keep-alive cron with jittered schedule (3–5 days), typing presence simulation, and self-chat dispatches.
 - [ ] **[01.6]** **Redis Queue Integration & Deduplication Lock** — Connect to `whatsapp:receive:inbox` and `whatsapp:send:priority` with atomic Redis deduplication lock (`SET NX EX 300`).
 - [ ] **[02.1]** **Dual-Device QR Pairing & Granular Health API** — HTTP endpoints for pairing both sessions independently (`GET /qr/baileys`, `GET /qr/wwebjs`) and reporting multi-engine health (`GET /health`).
 
