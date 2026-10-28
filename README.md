@@ -85,6 +85,8 @@ cp .env.example .env
 | `NODE_ENV` | Runtime environment mode | `development` | No |
 | `PORT` | HTTP server port for `/health` and `/qr/*` | `3000` | No |
 | `REDIS_URL` | Redis connection URL | `redis://127.0.0.1:6379` | Yes |
+| `AUTH_DIR_BAILEYS` | Multi-device auth storage path for Baileys | `/data/auth/baileys` | No |
+| `AUTH_DIR_WWEBJS` | Profile auth storage path for WWebJS | `/data/auth/wwebjs` | No |
 | `FAILOVER_ERROR_THRESHOLD` | Consecutive errors before triggering failover | `3` | No |
 | `PROBE_STABILITY_WINDOW_SEC` | Seconds Baileys must remain stable before failback | `300` | No |
 | `KEEPALIVE_INTERVAL_DAYS_MIN` | Minimum days between standby keep-alive pings | `3` | No |

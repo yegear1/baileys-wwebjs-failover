@@ -4,8 +4,8 @@ export interface DedupHashInput {
   readonly remoteJid: string;
   readonly senderJid: string;
   readonly timestamp: number;
-  readonly textBody?: string | null;
-  readonly mediaDigest?: string | null;
+  readonly textBody?: string | null | undefined;
+  readonly mediaDigest?: string | null | undefined;
 }
 
 /**

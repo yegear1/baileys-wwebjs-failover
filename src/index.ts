@@ -18,4 +18,7 @@ export function getGatewayInfo(): GatewayInfo {
 
 export * from "./contracts/driver.js";
 export * from "./contracts/messages.js";
+export * from "./drivers/auth-utils.js";
+export * from "./drivers/baileys.js";
+export * from "./drivers/baileys-mapper.js";
 export * from "./utils/dedup.js";
