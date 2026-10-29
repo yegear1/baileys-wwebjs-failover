@@ -174,6 +174,9 @@ export class GatewayApplication {
     this.isStopping = true;
     logger.info("Initiating graceful shutdown of baileys-wwebjs-failover gateway");
 
+    // Remove OS signal listeners immediately to prevent listener leaks and redundant triggers
+    this.removeSignalHandlers();
+
     // Orderly teardown: HTTP -> Maintenance -> Buffer Drain -> Queues -> Orchestrator/Drivers
     await this.safeStep(() => this.httpServer.stop(), "GatewayHttpServer");
     this.safeSyncStep(() => this.maintenanceDaemon.stop(), "StandbyMaintenanceDaemon");

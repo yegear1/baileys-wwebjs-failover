@@ -71,6 +71,7 @@ $$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textB
 * Shutdown lifecycle ordering drains and cancels in-flight orchestrator buffer items before worker shutdown, safely re-queueing to Redis without retry penalty or DLQ escalation to prevent deadlocks on exit.
 * Circuit breaker consecutive failure counter strictly tracks unexpired errors within the sliding window, guaranteeing consistent decay under sustained errors, intermittent bursts, or idle periods.
 * Outbound queue worker pauses BLPOP dequeuing during failover transitions (`FENCING`, `COLD_START_STANDBY`, `RECOVERY_SWAP`), persisting burst messages safely in Redis with zero loss across failover switches.
+* Dynamic timer and listener hygiene: `runWithTimeout` cancels timeout races upon resolution; `RedisOutboundWorker` clears wakeup and backoff timers on pause/stop; `FailoverOrchestrator` clears listener sets on shutdown; `GatewayApplication` deregisters OS signal handlers on stop, guaranteeing bounded heap delta and zero dangling handles across repeated lifecycle loops.
 
 ---
 

@@ -94,6 +94,8 @@ export class RedisOutboundWorker {
   private loopPromise?: Promise<void> | undefined = undefined;
   private unsubscribeOrchestrator?: (() => void) | undefined = undefined;
   private pauseWakeupResolve?: (() => void) | undefined = undefined;
+  private pauseTimer?: NodeJS.Timeout | undefined = undefined;
+  private loopSleepTimer?: NodeJS.Timeout | undefined = undefined;
 
   private processedCount = 0;
   private errorCount = 0;
@@ -149,6 +151,16 @@ export class RedisOutboundWorker {
       this.unsubscribeOrchestrator = undefined;
     }
 
+    if (this.pauseTimer) {
+      clearTimeout(this.pauseTimer);
+      this.pauseTimer = undefined;
+    }
+
+    if (this.loopSleepTimer) {
+      clearTimeout(this.loopSleepTimer);
+      this.loopSleepTimer = undefined;
+    }
+
     this.triggerWakeup();
 
     if (this.loopPromise) {
@@ -173,6 +185,10 @@ export class RedisOutboundWorker {
   }
 
   private triggerWakeup(): void {
+    if (this.pauseTimer) {
+      clearTimeout(this.pauseTimer);
+      this.pauseTimer = undefined;
+    }
     if (this.pauseWakeupResolve) {
       const resolve = this.pauseWakeupResolve;
       this.pauseWakeupResolve = undefined;
@@ -183,13 +199,14 @@ export class RedisOutboundWorker {
   private async waitForResumeOrShutdown(): Promise<void> {
     await new Promise<void>((resolve) => {
       this.pauseWakeupResolve = resolve;
-      const timer = setTimeout(() => {
+      this.pauseTimer = setTimeout(() => {
+        this.pauseTimer = undefined;
         if (this.pauseWakeupResolve === resolve) {
           this.pauseWakeupResolve = undefined;
           resolve();
         }
       }, this.pauseCheckIntervalMs);
-      timer.unref?.();
+      this.pauseTimer.unref?.();
     });
   }
 
@@ -228,7 +245,13 @@ export class RedisOutboundWorker {
         );
 
         // Sleep briefly before retrying to prevent hot loop on Redis disconnect
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await new Promise((resolve) => {
+          this.loopSleepTimer = setTimeout(() => {
+            this.loopSleepTimer = undefined;
+            resolve(undefined);
+          }, 1000);
+          this.loopSleepTimer.unref?.();
+        });
       }
     }
   }

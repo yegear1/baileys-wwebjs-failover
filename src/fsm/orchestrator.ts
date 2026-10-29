@@ -468,6 +468,11 @@ export class FailoverOrchestrator {
       this.fencingLock.release("wwebjs"),
     ]);
 
+    // INVARIANT: Clear all listener sets upon shutdown to eliminate dangling closures
+    this.stateListeners.clear();
+    this.messageListeners.clear();
+    this.probeStatusListeners.clear();
+
     this.activeEngine = null;
   }
 

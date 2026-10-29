@@ -202,6 +202,27 @@ export function cleanupChromiumLocks(dir: string, logger?: Logger): string[] {
   return removed;
 }
 
+async function runWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutErrMsg: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(timeoutErrMsg)), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 /**
  * Driver adapter for WhatsApp Web via Puppeteer / whatsapp-web.js.
  *
@@ -243,6 +264,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
   private isExplicitDisconnect = false;
   private lastKnownPid: number | undefined = undefined;
   private healthCheckTimer: NodeJS.Timeout | null = null;
+  private recoveryRetryTimer: NodeJS.Timeout | null = null;
 
   private readonly messageHandlers: Set<(msg: InboundMessage) => Promise<void>> = new Set();
   private readonly statusHandlers: Set<(status: EngineStatus) => void> = new Set();
@@ -430,6 +452,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
     this.isExplicitDisconnect = true;
     this.isRecovering = false;
     this.stopHealthCheckTimer();
+    this.clearRecoveryRetryTimer();
 
     if (this.client) {
       const client = this.client;
@@ -440,12 +463,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
       const pid = browserProcess?.pid ?? this.lastKnownPid;
 
       try {
-        await Promise.race([
-          client.destroy(),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Client destroy timeout")), this.teardownTimeoutMs),
-          ),
-        ]);
+        await runWithTimeout(client.destroy(), this.teardownTimeoutMs, "Client destroy timeout");
       } catch (err) {
         this.logger.warn(
           { err },
@@ -530,16 +548,11 @@ export class WWebJSDriver implements IWhatsAppDriver {
         pageResponsive = false;
       } else if (typeof page.evaluate === "function") {
         try {
-          await Promise.race([
+          await runWithTimeout(
             page.evaluate(() => 1),
-            new Promise<never>((_, reject) => {
-              const timer = setTimeout(
-                () => reject(new Error("Page probe timeout")),
-                this.pageProbeTimeoutMs,
-              );
-              timer.unref?.();
-            }),
-          ]);
+            this.pageProbeTimeoutMs,
+            "Page probe timeout",
+          );
           pageResponsive = true;
         } catch {
           pageResponsive = false;
@@ -648,15 +661,11 @@ export class WWebJSDriver implements IWhatsAppDriver {
         const clientToDestroy = this.client;
         this.client = null;
         try {
-          await Promise.race([
+          await runWithTimeout(
             clientToDestroy.destroy(),
-            new Promise((_, reject) =>
-              setTimeout(
-                () => reject(new Error("Client destroy timeout during recovery")),
-                this.teardownTimeoutMs,
-              ),
-            ),
-          ]);
+            this.teardownTimeoutMs,
+            "Client destroy timeout during recovery",
+          );
         } catch (destroyErr) {
           this.logger.debug({ destroyErr }, "Ignored error during client destroy in recovery");
         }
@@ -694,9 +703,12 @@ export class WWebJSDriver implements IWhatsAppDriver {
       );
 
       if (this.restartCount < this.maxRestartRetries && !this.isExplicitDisconnect) {
-        setTimeout(() => {
+        this.clearRecoveryRetryTimer();
+        this.recoveryRetryTimer = setTimeout(() => {
+          this.recoveryRetryTimer = null;
           void this.recover(`Subsequent retry after failed attempt: ${String(err)}`);
         }, this.restartBackoffMs);
+        this.recoveryRetryTimer.unref?.();
       } else {
         this.updateStatus({
           engine: "wwebjs",
@@ -910,6 +922,13 @@ export class WWebJSDriver implements IWhatsAppDriver {
     if (this.healthCheckTimer) {
       clearInterval(this.healthCheckTimer);
       this.healthCheckTimer = null;
+    }
+  }
+
+  private clearRecoveryRetryTimer(): void {
+    if (this.recoveryRetryTimer) {
+      clearTimeout(this.recoveryRetryTimer);
+      this.recoveryRetryTimer = null;
     }
   }
 
