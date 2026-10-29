@@ -70,6 +70,7 @@ $$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textB
 * Host network WAN connectivity probe validates internet reachability prior to WWebJS standby activation, preventing false failover during host internet outages.
 * Shutdown lifecycle ordering drains and cancels in-flight orchestrator buffer items before worker shutdown, safely re-queueing to Redis without retry penalty or DLQ escalation to prevent deadlocks on exit.
 * Circuit breaker consecutive failure counter strictly tracks unexpired errors within the sliding window, guaranteeing consistent decay under sustained errors, intermittent bursts, or idle periods.
+* Outbound queue worker pauses BLPOP dequeuing during failover transitions (`FENCING`, `COLD_START_STANDBY`, `RECOVERY_SWAP`), persisting burst messages safely in Redis with zero loss across failover switches.
 
 ---
 

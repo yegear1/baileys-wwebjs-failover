@@ -217,19 +217,25 @@ class InMemoryRedisClient implements ITestRedisClient {
     options?: { keys?: string[]; arguments?: string[] },
   ): Promise<unknown> {
     // 1. Atomic deduplication script (checks all keys; sets all keys if none exist)
+    // INVARIANT: Synchronous check and set simulates Redis single-threaded Lua script atomicity
+    // without yielding to the JS microtask queue between candidate key checks.
     if (script.includes("EXISTS")) {
       const keys = options?.keys ?? [];
       const ttlSec = options?.arguments?.[0] ? Number(options.arguments[0]) : 300;
 
       for (const k of keys) {
-        const val = await this.get(k);
-        if (val !== null) {
+        const exp = this.expirations.get(k);
+        if (exp !== undefined && Date.now() > exp) {
+          this.store.delete(k);
+          this.expirations.delete(k);
+        } else if (this.store.has(k)) {
           return 0;
         }
       }
 
       for (const k of keys) {
-        await this.set(k, "1", { EX: ttlSec });
+        this.store.set(k, "1");
+        this.expirations.set(k, Date.now() + ttlSec * 1000);
       }
 
       return 1;
@@ -238,10 +244,16 @@ class InMemoryRedisClient implements ITestRedisClient {
     // 2. Fencing lock release script (DEL key if value == expectedValue)
     const key = options?.keys?.[0];
     const expectedValue = options?.arguments?.[0];
-    if (key && expectedValue && (await this.get(key)) === expectedValue) {
-      this.store.delete(key);
-      this.expirations.delete(key);
-      return 1;
+    if (key && expectedValue) {
+      const exp = this.expirations.get(key);
+      if (exp !== undefined && Date.now() > exp) {
+        this.store.delete(key);
+        this.expirations.delete(key);
+      } else if (this.store.get(key) === expectedValue) {
+        this.store.delete(key);
+        this.expirations.delete(key);
+        return 1;
+      }
     }
     return 0;
   }
