@@ -7,18 +7,10 @@
 
 ## Active Task
 
-### [90.5] Observability & Prometheus Metrics Exporter
+### [90.6] Dynamic Chromium Health & Standby Puppeteer Restart Recovery
 
-**Status:** PLANNING
-**Objective:** Export a real-time Prometheus metrics endpoint (`/metrics`) exposing failover count, engine latencies, buffer depth, queue lengths, and DLQ counters without leaking secrets.
-
-**Plan:**
-1. Prometheus Metrics Formulation:
-   - Expose counter and gauge metrics following Prometheus formatting (`failover_events_total`, `outbound_buffer_depth`, `engine_status`, `queue_length`, `dlq_messages_total`).
-2. HTTP Route Exposure:
-   - Wire `/metrics` route into `GatewayHttpServer`.
-3. Tests & Verification:
-   - Validate Prometheus scrape text format, strict types, and integration with `HealthService`.
+**Status:** READY FOR PLANNING
+**Objective:** Detect and recover zombie Chromium processes during extended standby periods, ensuring graceful browser relaunch and health status propagation without leaking memory.
 
 ---
 
@@ -43,13 +35,14 @@
 | [90.2] | Driver Stability & Lifecycle Hardening | [`917937d`] | 2026-10-29 |
 | [90.3] | Atomic Lua Deduplication & Media Digest Parity | [`07f4807`] | 2026-10-29 |
 | [90.4] | Shutdown Lifecycle Ordering & Buffer Safety | [`1e70ce7`] | 2026-10-29 |
+| [90.5] | Observability & Prometheus Metrics Exporter | [`8a10ca6`] | 2026-10-29 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- [90.6] Dynamic Chromium Health & Standby Puppeteer Restart Recovery
-  - Detect and recover zombie Chromium processes during extended standby periods.
+- [90.7] End-to-End Load & Sustained Queue Concurrency Verification
+  - Benchmark gateway throughput under synthetic high-volume burst and backpressure.
 
 ---
 
