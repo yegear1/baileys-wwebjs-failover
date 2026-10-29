@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### 📌 Task [01.6]: Redis Queue Integration & Deduplication Lock
+### 📌 Task [02.1]: Dual-Device QR Pairing & Granular Health API
 
-- **Description:** Implement Redis queue consumers and producers connecting to `whatsapp:receive:inbox` (inbound message queue) and `whatsapp:send:priority` (outbound dispatch queue), with distributed atomic deduplication lock (`SET NX EX 300`), at-most-once delivery guarantee, graceful backpressure, and worker error recovery.
-- **Systems Involved:** `redis`, `queues`, `orchestrator`, `dedup`
+- **Description:** Implement HTTP endpoints for pairing both sessions independently (`GET /qr/baileys`, `GET /qr/wwebjs`) and reporting multi-engine health (`GET /health`) with status diagnostics, active engine role, driver statuses, and Redis queue metrics.
+- **Systems Involved:** `http`, `health`, `qr`, `drivers`, `orchestrator`, `queues`
 - **Action Type:**
   - [ ] Read-only / Documentation
   - [x] Source code changes
@@ -18,10 +18,9 @@
   *(Workflow: `READY FOR PLANNING` → `PLANNING` on presenting plan → approval → `RUNNING`)*
 
 ### Acceptance Criteria
-- [ ] Implement Redis queue manager connecting to `whatsapp:receive:inbox` and `whatsapp:send:priority`.
-- [ ] Atomic deduplication lock using Redis `SET dedupe:msg:<hash> 1 NX EX 300` before pushing to `whatsapp:receive:inbox`.
-- [ ] Outbound priority queue worker consuming from `whatsapp:send:priority` via `BLPOP` and dispatching via `FailoverOrchestrator.sendMessage()`.
-- [ ] Graceful buffering and pause during orchestrator failover state transitions (`FENCING`, `COLD_START_STANDBY`, `RECOVERY_SWAP`).
+- [ ] Implement `GET /health` responding with `{ status, active_engine, primary, standby, queues }` matching `.agent/NOTES.md`.
+- [ ] Implement `GET /qr/baileys` returning pairing QR code (raw text + SVG) or session status when paired.
+- [ ] Implement `GET /qr/wwebjs` returning pairing QR code (raw text + SVG) or session status when paired.
 - [ ] Strict type checking passing with zero `any` (`pnpm typecheck` exits 0).
 - [ ] Automated tests passing (`pnpm test` exits 0).
 - [ ] Linter and format checks passing (`pnpm lint` exits 0).
@@ -40,12 +39,13 @@
 | [01.3] | WWebJS Standby Engine Adapter & Container Hygiene | [`bd2aa75`] | 2026-10-28 |
 | [01.4] | Failover Orchestrator & Circuit Breaker FSM | [`eb3d96b`] | 2026-10-28 |
 | [01.5] | Standby Maintenance Daemon & Anti-Fingerprinting Keep-Alive | [`289fc9a`] | 2026-10-28 |
+| [01.6] | Redis Queue Integration & Deduplication Lock | [`0ef28c3`] | 2026-10-28 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- [ ] **[02.1]** **Dual-Device QR Pairing & Granular Health API** — HTTP endpoints for pairing both sessions independently (`GET /qr/baileys`, `GET /qr/wwebjs`) and reporting multi-engine health (`GET /health`).
+- [ ] **[02.2]** **Container Orchestration & Production Compose Stack** — Dockerfile and Compose setup with Chromium shm boundaries, Redis container, volume segregation, and Vector/VictoriaLogs integration.
 
 ---
 
