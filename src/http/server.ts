@@ -2,6 +2,7 @@ import http, { type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { logger as defaultLogger } from "../index.js";
 import { HealthService } from "./health-service.js";
+import { MetricsService } from "./metrics-service.js";
 import { DefaultQrRenderer, QrService } from "./qr-service.js";
 import { RequestRouter } from "./routes.js";
 import type { GatewayHttpServerOptions } from "./types.js";
@@ -17,6 +18,7 @@ export class GatewayHttpServer {
   private readonly router: RequestRouter;
   private readonly healthService: HealthService;
   private readonly qrService: QrService;
+  private readonly metricsService: MetricsService;
   private readonly port: number;
   private readonly host: string;
   private boundPort: number | undefined;
@@ -34,9 +36,20 @@ export class GatewayHttpServer {
 
     this.qrService = new QrService(options.qrRenderer ?? new DefaultQrRenderer());
 
+    this.metricsService =
+      options.metricsService ??
+      new MetricsService({
+        orchestrator: options.orchestrator,
+        primaryDriver: options.primaryDriver,
+        standbyDriver: options.standbyDriver,
+        queueManager: options.queueManager,
+        healthService: this.healthService,
+      });
+
     this.router = new RequestRouter({
       healthService: this.healthService,
       qrService: this.qrService,
+      metricsService: this.metricsService,
       primaryDriver: options.primaryDriver,
       standbyDriver: options.standbyDriver,
     });
@@ -102,5 +115,9 @@ export class GatewayHttpServer {
 
   public getQrService(): QrService {
     return this.qrService;
+  }
+
+  public getMetricsService(): MetricsService {
+    return this.metricsService;
   }
 }

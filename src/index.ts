@@ -29,6 +29,7 @@ export * from "./fsm/fencing.js";
 export * from "./fsm/orchestrator.js";
 export * from "./fsm/types.js";
 export * from "./http/health-service.js";
+export * from "./http/metrics-service.js";
 export * from "./http/qr-service.js";
 export * from "./http/routes.js";
 export * from "./http/server.js";

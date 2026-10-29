@@ -65,6 +65,12 @@ export class FailoverOrchestrator {
   private activeEngine: EngineName | null = "baileys";
   private lastTransitionAt: Date = new Date();
   private lastError: string | undefined = undefined;
+  private failoverCount = 0;
+  private failbackCount = 0;
+  private readonly lastEngineLatencySeconds: Record<EngineName, number> = {
+    baileys: 0,
+    wwebjs: 0,
+  };
 
   private readonly stateListeners: Set<StateChangeListener> = new Set();
   private readonly messageListeners: Set<(msg: InboundMessage) => Promise<void>> = new Set();
@@ -115,9 +121,23 @@ export class FailoverOrchestrator {
       standbyStatus: this.standby.getStatus(),
       bufferedMessagesCount: this.outboundBuffer.length,
       failureCount: this.circuitBreaker.getConsecutiveFailures(),
+      failoverCount: this.failoverCount,
+      failbackCount: this.failbackCount,
       lastTransitionAt: this.lastTransitionAt,
       lastError: this.lastError,
     };
+  }
+
+  getFailoverCount(): number {
+    return this.failoverCount;
+  }
+
+  getFailbackCount(): number {
+    return this.failbackCount;
+  }
+
+  getEngineLatencies(): Record<EngineName, number> {
+    return { ...this.lastEngineLatencySeconds };
   }
 
   onStateChange(listener: StateChangeListener): () => void {
@@ -177,11 +197,14 @@ export class FailoverOrchestrator {
       throw new Error(`Cannot send message: no active driver available in state ${this.state}`);
     }
 
+    const startTime = Date.now();
     try {
       const receipt = await currentDriver.sendMessage(to, content);
+      this.lastEngineLatencySeconds[currentDriver.name] = (Date.now() - startTime) / 1000;
       this.circuitBreaker.recordSuccess();
       return receipt;
     } catch (error) {
+      this.lastEngineLatencySeconds[currentDriver.name] = (Date.now() - startTime) / 1000;
       this.lastError = error instanceof Error ? error.message : String(error);
       const tripped = this.circuitBreaker.recordFailure(error);
       if (tripped && this.state === "PRIMARY_ACTIVE") {
@@ -588,6 +611,14 @@ export class FailoverOrchestrator {
     const from = this.state;
     this.state = nextState;
     this.lastTransitionAt = new Date();
+
+    if (nextState === "FALLBACK_ACTIVE" && from !== "FALLBACK_ACTIVE") {
+      this.failoverCount++;
+    }
+    if (nextState === "PRIMARY_ACTIVE" && from === "RECOVERY_SWAP") {
+      this.failbackCount++;
+    }
+
     logger.info({ from, to: nextState, event, reason }, "FSM transition");
 
     for (const listener of this.stateListeners) {

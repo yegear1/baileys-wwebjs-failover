@@ -8,6 +8,7 @@ import {
   DEFAULT_BLPOP_TIMEOUT_SECONDS,
   DEFAULT_DEDUP_PREFIX,
   DEFAULT_DEDUP_TTL_SECONDS,
+  DEFAULT_DLQ_QUEUE,
   DEFAULT_INBOX_QUEUE,
   DEFAULT_OUTBOUND_QUEUE,
   type InboundPublisherMetrics,
@@ -50,6 +51,9 @@ export class RedisQueueManager {
   private readonly deduplicator: RedisDeduplicator;
   private readonly publisher: RedisInboundPublisher;
   private readonly worker: RedisOutboundWorker;
+  private readonly inboxQueueKey: string;
+  private readonly outboundQueueKey: string;
+  private readonly dlqQueueKey: string;
 
   private unsubscribeInbound?: (() => void) | undefined = undefined;
   private isStarted = false;
@@ -57,6 +61,9 @@ export class RedisQueueManager {
   constructor(options: RedisQueueManagerOptions) {
     this.client = options.client;
     this.orchestrator = options.orchestrator;
+    this.inboxQueueKey = options.inboxQueueKey ?? DEFAULT_INBOX_QUEUE;
+    this.outboundQueueKey = options.outboundQueueKey ?? DEFAULT_OUTBOUND_QUEUE;
+    this.dlqQueueKey = options.dlqQueueKey ?? DEFAULT_DLQ_QUEUE;
 
     // INVARIANT: Redis BLPOP blocks the socket connection; dedicated client required for consumers
     this.blockingClient =
@@ -76,14 +83,14 @@ export class RedisQueueManager {
     this.publisher = new RedisInboundPublisher({
       client: this.client,
       deduplicator: this.deduplicator,
-      inboxQueueKey: options.inboxQueueKey ?? DEFAULT_INBOX_QUEUE,
+      inboxQueueKey: this.inboxQueueKey,
     });
 
     this.worker = new RedisOutboundWorker({
       client: this.blockingClient,
       orchestrator: this.orchestrator,
-      outboundQueueKey: options.outboundQueueKey ?? DEFAULT_OUTBOUND_QUEUE,
-      dlqQueueKey: options.dlqQueueKey,
+      outboundQueueKey: this.outboundQueueKey,
+      dlqQueueKey: this.dlqQueueKey,
       maxSendRetries: options.maxSendRetries,
       blpopTimeoutSeconds: options.blpopTimeoutSeconds ?? DEFAULT_BLPOP_TIMEOUT_SECONDS,
       pauseCheckIntervalMs: options.pauseCheckIntervalMs ?? 500,
@@ -163,5 +170,33 @@ export class RedisQueueManager {
       publisher: this.publisher.getMetrics(),
       worker: this.worker.getMetrics(),
     };
+  }
+
+  /**
+   * Asynchronously inspects queue depths across inbox, outbound, and dead-letter queues.
+   *
+   * INVARIANT: Safely falls back to zeroes if the Redis client is offline or lacks lLen method.
+   */
+  async getQueueLengths(): Promise<{ inbox: number; outbound: number; dlq: number }> {
+    let inbox = 0;
+    let outbound = 0;
+    let dlq = 0;
+
+    if (this.client.isOpen && typeof this.client.lLen === "function") {
+      try {
+        const [inboxLen, outboundLen, dlqLen] = await Promise.all([
+          this.client.lLen(this.inboxQueueKey),
+          this.client.lLen(this.outboundQueueKey),
+          this.client.lLen(this.dlqQueueKey),
+        ]);
+        inbox = inboxLen ?? 0;
+        outbound = outboundLen ?? 0;
+        dlq = dlqLen ?? 0;
+      } catch {
+        // Fallback to zeroes during client disconnection
+      }
+    }
+
+    return { inbox, outbound, dlq };
   }
 }

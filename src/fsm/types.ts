@@ -47,6 +47,8 @@ export interface FailoverSnapshot {
   readonly standbyStatus: EngineStatus;
   readonly bufferedMessagesCount: number;
   readonly failureCount: number;
+  readonly failoverCount?: number | undefined;
+  readonly failbackCount?: number | undefined;
   readonly lastTransitionAt: Date;
   readonly lastError?: string | undefined;
 }

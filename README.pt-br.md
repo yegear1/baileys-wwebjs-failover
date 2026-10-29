@@ -86,7 +86,7 @@ cp .env.example .env
 | Variável | Descrição | Padrão | Obrigatório |
 | :--- | :--- | :--- | :--- |
 | `NODE_ENV` | Modo do ambiente de execução | `development` | Não |
-| `PORT` | Porta HTTP para `/health` e `/qr/*` | `3000` | Não |
+| `PORT` | Porta HTTP para `/health`, `/metrics` e `/qr/*` | `3000` | Não |
 | `REDIS_URL` | URL de conexão com o Redis | `redis://127.0.0.1:6379` | Sim |
 | `REDIS_PORT` | Porta em loopback no host mapeada pelo Compose para o Redis | `6379` | Não |
 | `AUTH_DIR_BAILEYS` | Diretório de armazenamento das credenciais do Baileys | `/data/auth/baileys` | Não |
@@ -120,8 +120,9 @@ docker compose -f docker-compose.yml --env-file .env.example config --quiet
 # Iniciar serviços do redis e gateway em background
 docker compose up -d
 
-# Inspecionar saúde e motor ativo
+# Inspecionar saúde, motor ativo e métricas Prometheus
 curl -s http://127.0.0.1:3000/health
+curl -s http://127.0.0.1:3000/metrics
 
 # Acompanhar logs do gateway
 docker compose logs -f gateway

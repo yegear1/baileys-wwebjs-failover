@@ -7,6 +7,7 @@ import type {
 import type { FailoverOrchestrator } from "../fsm/orchestrator.js";
 import type { FailoverState } from "../fsm/types.js";
 import type { QueueManagerStatus, RedisQueueManager } from "../queues/manager.js";
+import type { MetricsService } from "./metrics-service.js";
 
 export type HealthStatus = "ok" | "degraded" | "down";
 
@@ -35,6 +36,7 @@ export interface GatewayHttpServerOptions {
   readonly primaryDriver: IWhatsAppDriver;
   readonly standbyDriver: IWhatsAppDriver;
   readonly queueManager?: RedisQueueManager | undefined;
+  readonly metricsService?: MetricsService | undefined;
   readonly qrRenderer?: IQrRenderer | undefined;
   readonly port?: number | undefined;
   readonly host?: string | undefined;

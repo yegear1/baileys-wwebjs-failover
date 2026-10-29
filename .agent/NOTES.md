@@ -78,6 +78,7 @@ $$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textB
 | Endpoint | Method | Response Payload | Description |
 |---|---|---|---|
 | `/health` | `GET` | `{ status: "ok" \| "degraded" \| "down", active_engine: "baileys" \| "wwebjs", primary: EngineStatusDto, standby: EngineStatusDto }` | Granular multi-engine health check |
+| `/metrics` | `GET` | `text/plain; version=0.0.4` | Prometheus metrics exporter (`failover_events_total`, `outbound_buffer_depth`, `engine_status`, `queue_length`, `dlq_messages_total`, `engine_latency_seconds`) |
 | `/qr/baileys` | `GET` | `{ engine: "baileys", status: "UNPAIRED" \| "PAIRING_QR_READY" \| "CONNECTED", qr_raw?: string, qr_svg?: string }` | Dedicated QR code for primary session |
 | `/qr/wwebjs` | `GET` | `{ engine: "wwebjs", status: "UNPAIRED" \| "PAIRING_QR_READY" \| "STANDBY" \| "CONNECTED", qr_raw?: string, qr_svg?: string }` | Dedicated QR code for standby session |
 

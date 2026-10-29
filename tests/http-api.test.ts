@@ -90,6 +90,10 @@ class MockQueueManager {
   setIsOpen(isOpen: boolean): void {
     this.status = { ...this.status, isOpen };
   }
+
+  async getQueueLengths(): Promise<{ inbox: number; outbound: number; dlq: number }> {
+    return { inbox: 5, outbound: 3, dlq: 1 };
+  }
 }
 
 describe("Dual-Device QR Pairing & Granular Health API", () => {
@@ -294,6 +298,116 @@ describe("Dual-Device QR Pairing & Granular Health API", () => {
       expect(data.engine).toBe("wwebjs");
       expect(data.status).toBe("STANDBY");
       expect(data.qr_raw).toBeUndefined();
+    });
+  });
+
+  describe("GET /metrics (Prometheus Exporter)", () => {
+    it("returns 200 OK with Prometheus exposition content-type and valid metrics headers", async () => {
+      const res = await fetch(`${baseUrl}/metrics`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("text/plain; version=0.0.4; charset=utf-8");
+
+      const body = await res.text();
+      expect(body).toContain("# HELP failover_events_total");
+      expect(body).toContain("# TYPE failover_events_total counter");
+      expect(body).toContain("failover_events_total 0");
+
+      expect(body).toContain("# HELP fsm_state");
+      expect(body).toContain('fsm_state{state="PRIMARY_ACTIVE"} 1');
+      expect(body).toContain('fsm_state{state="FALLBACK_ACTIVE"} 0');
+
+      expect(body).toContain("# HELP engine_status");
+      expect(body).toContain('engine_status{engine="baileys",role="primary"} 1');
+      expect(body).toContain('engine_status{engine="wwebjs",role="standby"} 0');
+
+      expect(body).toContain("# HELP queue_length");
+      expect(body).toContain('queue_length{queue="inbox"} 5');
+      expect(body).toContain('queue_length{queue="outbound"} 3');
+      expect(body).toContain('queue_length{queue="dlq"} 1');
+
+      expect(body).toContain("# HELP dlq_messages_total");
+      expect(body).toContain("dlq_messages_total 0");
+
+      expect(body).toContain("# HELP messages_processed_total");
+      expect(body).toContain("messages_processed_total 45");
+
+      expect(body).toContain("# HELP messages_inbound_published_total");
+      expect(body).toContain("messages_inbound_published_total 12");
+
+      expect(body).toContain("# HELP messages_inbound_duplicate_total");
+      expect(body).toContain("messages_inbound_duplicate_total 2");
+
+      expect(body).toContain("# HELP gateway_health_status");
+      expect(body).toContain('gateway_health_status{status="ok"} 1');
+    });
+
+    it("dynamically increments failover counter and updates state upon failover transition", async () => {
+      await orchestrator.start();
+      await orchestrator.triggerFailover("Simulated failover for metrics test");
+
+      const res = await fetch(`${baseUrl}/metrics`);
+      const body = await res.text();
+
+      expect(body).toContain("failover_events_total 1");
+      expect(body).toContain('fsm_state{state="PRIMARY_ACTIVE"} 0');
+      expect(body).toContain('fsm_state{state="FALLBACK_ACTIVE"} 1');
+    });
+
+    it("tracks engine dispatch latency when messages are sent", async () => {
+      await orchestrator.start();
+      await orchestrator.sendMessage("5511999998888@c.us", {
+        to: "5511999998888@c.us",
+        type: "text",
+        text: "Latency measurement test",
+      });
+
+      const res = await fetch(`${baseUrl}/metrics`);
+      const body = await res.text();
+
+      expect(body).toMatch(/engine_latency_seconds\{engine="baileys"\} \d+(\.\d+)?/);
+      expect(body).toContain('engine_latency_seconds{engine="wwebjs"} 0');
+    });
+
+    it("operates gracefully when queueManager is omitted (standalone server)", async () => {
+      const serverWithoutQueues = new GatewayHttpServer({
+        orchestrator,
+        primaryDriver,
+        standbyDriver,
+        port: 0,
+        host: "127.0.0.1",
+      });
+      const port = await serverWithoutQueues.start(0, "127.0.0.1");
+
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/metrics`);
+        expect(res.status).toBe(200);
+        const body = await res.text();
+
+        expect(body).toContain('queue_length{queue="inbox"} 0');
+        expect(body).toContain('queue_length{queue="outbound"} 0');
+        expect(body).toContain('queue_length{queue="dlq"} 0');
+        expect(body).toContain("dlq_messages_total 0");
+      } finally {
+        await serverWithoutQueues.stop();
+      }
+    });
+
+    it("security invariant: never leaks pairing tokens, phone numbers, or passwords", async () => {
+      primaryDriver.setQrCode("2@secret_pairing_token_never_leak");
+      await orchestrator.start();
+      await orchestrator.sendMessage("5511999998888@c.us", {
+        to: "5511999998888@c.us",
+        type: "text",
+        text: "top_secret_classified_payload",
+      });
+
+      const res = await fetch(`${baseUrl}/metrics`);
+      const body = await res.text();
+
+      expect(body).not.toContain("secret_pairing_token_never_leak");
+      expect(body).not.toContain("5511999998888");
+      expect(body).not.toContain("top_secret_classified_payload");
+      expect(body).not.toContain("password");
     });
   });
 

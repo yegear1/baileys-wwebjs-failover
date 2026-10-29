@@ -1,11 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { IWhatsAppDriver } from "../contracts/driver.js";
 import type { HealthService } from "./health-service.js";
+import type { MetricsService } from "./metrics-service.js";
 import type { QrService } from "./qr-service.js";
 
 export interface RequestRouterDependencies {
   readonly healthService: HealthService;
   readonly qrService: QrService;
+  readonly metricsService: MetricsService;
   readonly primaryDriver: IWhatsAppDriver;
   readonly standbyDriver: IWhatsAppDriver;
 }
@@ -16,12 +18,14 @@ export interface RequestRouterDependencies {
 export class RequestRouter {
   private readonly healthService: HealthService;
   private readonly qrService: QrService;
+  private readonly metricsService: MetricsService;
   private readonly primaryDriver: IWhatsAppDriver;
   private readonly standbyDriver: IWhatsAppDriver;
 
   constructor(dependencies: RequestRouterDependencies) {
     this.healthService = dependencies.healthService;
     this.qrService = dependencies.qrService;
+    this.metricsService = dependencies.metricsService;
     this.primaryDriver = dependencies.primaryDriver;
     this.standbyDriver = dependencies.standbyDriver;
   }
@@ -50,6 +54,14 @@ export class RequestRouter {
 
     try {
       switch (path) {
+        case "/metrics": {
+          const metrics = await this.metricsService.getMetrics();
+          res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+          res.writeHead(200);
+          res.end(metrics);
+          return;
+        }
+
         case "/health": {
           const health = this.healthService.getHealth();
           const statusCode = health.status === "down" ? 503 : 200;
