@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### [90.8] Soak Test & Long-Running Memory Leak Audit
+### [None] Backlog Cleared
 
-**Status:** READY FOR PLANNING
-**Objective:** Execute simulated soak testing and heap inspection verifying zero steady-state heap bloat, no dangling timers or listeners, and deterministic zombie process elimination under long-running gateway operation.
+**Status:** READY FOR INSTRUCTION
+**Objective:** All epics, integration milestones, and hardening refactoring tasks ([90.1]–[90.8]) are complete. Awaiting human instructions or release direction.
 
 ---
 
@@ -38,6 +38,7 @@
 | [90.5] | Observability & Prometheus Metrics Exporter | [`8a10ca6`] | 2026-10-29 |
 | [90.6] | Dynamic Chromium Health & Standby Puppeteer Restart Recovery | [`a6bb283`] | 2026-10-29 |
 | [90.7] | End-to-End Load & Sustained Queue Concurrency Verification | [`184a6ed`] | 2026-10-29 |
+| [90.8] | Soak Test & Long-Running Memory Leak Audit | [`59739d7`] | 2026-10-29 |
 
 ---
 
