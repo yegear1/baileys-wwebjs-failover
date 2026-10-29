@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### 📌 Task [02.2]: Container Orchestration & Production Compose Stack
+### 📌 Task [03.1]: End-to-End Gateway Integration & Service Bootstrap
 
-- **Description:** Implement multi-stage Dockerfile and production Docker Compose configuration with Chromium shm boundaries (`shm_size: 2gb`), Redis service, volume segregation (`/data/auth/baileys`, `/data/auth/wwebjs`), healthcheck probes, and VictoriaLogs/Vector logging hygiene.
-- **Systems Involved:** `docker`, `compose`, `chromium`, `redis`, `volumes`
+- **Description:** Implement entrypoint bootstrapping HTTP observability server, Redis queue consumer/publisher, failover orchestrator, standby maintenance daemon, and graceful teardown signal handling.
+- **Systems Involved:** `bootstrap`, `orchestrator`, `queues`, `http`, `lifecycle`
 - **Action Type:**
   - [ ] Read-only / Documentation
   - [x] Source code changes
@@ -18,10 +18,10 @@
   *(Workflow: `READY FOR PLANNING` → `PLANNING` on presenting plan → approval → `RUNNING`)*
 
 ### Acceptance Criteria
-- [ ] Multi-stage `Dockerfile` with Node 20 LTS, non-root user, Chromium dependencies, and minimal runtime footprint.
-- [ ] Production `docker-compose.yml` with `init: true`, `shm_size: 2gb`, segregated auth volumes, Redis 7+ service, and healthchecks.
-- [ ] Compose validation and syntax checks exit 0.
-- [ ] Documentation updated with compose deployment commands.
+- [ ] Bootstrap entrypoint (`src/main.ts` / `src/index.ts`) coordinates lifecycle startup of drivers, queues, HTTP server, and maintenance daemon.
+- [ ] Signal handling (`SIGTERM`, `SIGINT`) gracefully stops queue workers, tears down active and standby drivers, and closes redis connections.
+- [ ] End-to-end integration tests verify clean startup and graceful shutdown sequences.
+- [ ] Typecheck, tests, and linter exit code 0.
 
 ---
 
@@ -38,12 +38,13 @@
 | [01.5] | Standby Maintenance Daemon & Anti-Fingerprinting Keep-Alive | [`289fc9a`] | 2026-10-28 |
 | [01.6] | Redis Queue Integration & Deduplication Lock | [`0ef28c3`] | 2026-10-28 |
 | [02.1] | Dual-Device QR Pairing & Granular Health API | [`632eb2b`] | 2026-10-28 |
+| [02.2] | Container Orchestration & Production Compose Stack | [`18ad2d5`] | 2026-10-28 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- [ ] **[03.1]** **End-to-End Gateway Integration & Service Bootstrap** — Gateway runtime entrypoint wiring together HTTP server, queue consumers, maintenance daemon, and graceful teardown hooks.
+- [ ] **[03.2]** **E2E Smoke & Resilience Verification** — Integration test suite running against real Redis instance verifying failover cycle under synthetic network fault.
 
 ---
 
