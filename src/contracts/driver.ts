@@ -19,6 +19,8 @@ export interface EngineStatus {
   readonly batteryLevel?: number;
   readonly lastSeen?: Date;
   readonly error?: string;
+  readonly restartCount?: number;
+  readonly isHealthy?: boolean;
 }
 
 export type PresenceState = "composing" | "paused";
@@ -40,4 +42,6 @@ export interface IWhatsAppDriver {
   onMessage(handler: (msg: InboundMessage) => Promise<void>): void;
   onStatusChange(handler: (status: EngineStatus) => void): void;
   getStatus(): EngineStatus;
+  checkHealth?(): Promise<{ isHealthy: boolean; details?: unknown }>;
+  restart?(): Promise<void>;
 }

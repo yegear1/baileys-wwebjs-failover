@@ -125,6 +125,21 @@ export class MetricsService {
     lines.push("# TYPE engine_latency_seconds gauge");
     lines.push(`engine_latency_seconds{engine="baileys"} ${latencies.baileys ?? 0}`);
     lines.push(`engine_latency_seconds{engine="wwebjs"} ${latencies.wwebjs ?? 0}`);
+
+    if (
+      "getTotalRestarts" in this.standbyDriver &&
+      typeof (this.standbyDriver as { getTotalRestarts?: () => number }).getTotalRestarts ===
+        "function"
+    ) {
+      const restarts = (
+        this.standbyDriver as { getTotalRestarts: () => number }
+      ).getTotalRestarts();
+      lines.push(
+        "# HELP chromium_restarts_total Total number of Puppeteer/Chromium restarts executed for recovery.",
+      );
+      lines.push("# TYPE chromium_restarts_total counter");
+      lines.push(`chromium_restarts_total ${restarts}`);
+    }
   }
 
   private async appendQueueMetrics(lines: string[]): Promise<void> {

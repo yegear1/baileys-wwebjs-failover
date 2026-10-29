@@ -64,6 +64,7 @@ stateDiagram-v2
 - **Keep-Alive Anti-Fingerprint em Standby:** Rotina de manutenção que acorda o WWebJS com variação aleatória de intervalo (3 a 5 dias) e mensagens dinâmicas para evitar a desvinculação da sessão pelo WhatsApp.
 - **Desduplicação Atômica:** Filtro atômico no Redis garante processamento *at-most-once* durante janelas de transição entre motores.
 - **Prevenção Determinística de Socket Hang:** Aplica timeout configurável de 15s (`SEND_MESSAGE_TIMEOUT_MS`) nos envios do Baileys para evitar travamentos silenciosos.
+- **Saúde Dinâmica do Chromium e Recuperação com Reinicialização do Standby:** Monitora continuamente a atividade de processos no SO, estados de processo zumbi, conectividade de sessão CDP e responsividade de página, com reinicialização graciosa automática do Puppeteer e proteção de buffer em memória.
 - **Guarda de Conectividade WAN do Host:** Valida conectividade de internet antes de iniciar o failover, evitando inicialização desnecessária do Chromium durante quedas de WAN.
 - **Fila Zero-Loss e Dead-Letter Queue (DLQ):** Reenfileira automaticamente mensagens com falha transitória e direciona mensagens esgotadas ou malformadas para `whatsapp:send:dlq`.
 

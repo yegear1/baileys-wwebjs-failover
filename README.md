@@ -64,6 +64,7 @@ stateDiagram-v2
 - **Anti-Fingerprinting Standby Keep-Alive:** Periodic maintenance wakes WWebJS with randomized jitter (every 3–5 days) and dynamic text to prevent WhatsApp multi-device idle logouts.
 - **Inbound Deduplication:** Atomic Redis deduplication guarantees at-most-once processing during failover transitions.
 - **Deterministic Socket Hang Prevention:** Enforces a configurable 15s timeout (`SEND_MESSAGE_TIMEOUT_MS`) on Baileys send operations to avoid unbounded socket stalls.
+- **Dynamic Chromium Health & Standby Restart Recovery:** Continuously probes OS process liveness, zombie process states, CDP session connectivity, and page responsiveness, with automatic graceful Puppeteer relaunch and in-memory buffer protection.
 - **Host WAN Connectivity Guard:** Validates host internet reachability before initiating failovers, preventing false Chromium wakeups during host network outages.
 - **Zero-Loss Queueing & Dead-Letter Queue (DLQ):** Automatically re-queues transient send failures with backoff tracking, routing exhausted or malformed messages to `whatsapp:send:dlq`.
 

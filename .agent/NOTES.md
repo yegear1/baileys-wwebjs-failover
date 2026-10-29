@@ -78,7 +78,7 @@ $$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textB
 | Endpoint | Method | Response Payload | Description |
 |---|---|---|---|
 | `/health` | `GET` | `{ status: "ok" \| "degraded" \| "down", active_engine: "baileys" \| "wwebjs", primary: EngineStatusDto, standby: EngineStatusDto }` | Granular multi-engine health check |
-| `/metrics` | `GET` | `text/plain; version=0.0.4` | Prometheus metrics exporter (`failover_events_total`, `outbound_buffer_depth`, `engine_status`, `queue_length`, `dlq_messages_total`, `engine_latency_seconds`) |
+| `/metrics` | `GET` | `text/plain; version=0.0.4` | Prometheus metrics exporter (`failover_events_total`, `outbound_buffer_depth`, `engine_status`, `queue_length`, `dlq_messages_total`, `engine_latency_seconds`, `chromium_restarts_total`) |
 | `/qr/baileys` | `GET` | `{ engine: "baileys", status: "UNPAIRED" \| "PAIRING_QR_READY" \| "CONNECTED", qr_raw?: string, qr_svg?: string }` | Dedicated QR code for primary session |
 | `/qr/wwebjs` | `GET` | `{ engine: "wwebjs", status: "UNPAIRED" \| "PAIRING_QR_READY" \| "STANDBY" \| "CONNECTED", qr_raw?: string, qr_svg?: string }` | Dedicated QR code for standby session |
 
@@ -94,6 +94,9 @@ $$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textB
   - Flags: `--no-sandbox`, `--disable-setuid-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu`, `--no-first-run`, `--no-zygote`.
   - Process teardown: `client.destroy()` followed by tree kill (`process.kill(-pid, 'SIGKILL')`) if not exited within 5 seconds.
   - Container environment: Requires `init: true` (tini/dumb-init) and `shm_size: 2gb` minimum in Compose.
+  - Stale lock cleanup: Recursively removes orphaned `SingletonLock`, `SingletonCookie`, and `SingletonSocket` files on launch and standby teardown.
+  - Dynamic health probe: Inspects OS process liveness (`process.kill(pid, 0)`), zombie state in `/proc/${pid}/status`, CDP session status (`pupBrowser.isConnected()`), and page execution responsiveness (`pupPage.evaluate()`).
+  - Standby restart recovery: Gracefully restarts Chromium up to 3 times with exponential backoff on crash/zombie detection, while orchestrator buffers outbound messages during `DEGRADED` state.
 - **Standby Keep-Alive Rules:**
   - Jittered cron: runs every 3–5 days during quiet off-peak hours (02:30–05:40).
   - Recipient: strictly the bot's own self-chat / notes JID (`toMe`).

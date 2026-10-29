@@ -277,6 +277,13 @@ export class StandbyMaintenanceDaemon {
         "Standby driver not cleanly disconnected after maintenance cycle",
       );
     }
+    if (
+      "cleanupStandbyHygiene" in this.standbyDriver &&
+      typeof (this.standbyDriver as { cleanupStandbyHygiene?: () => unknown })
+        .cleanupStandbyHygiene === "function"
+    ) {
+      (this.standbyDriver as { cleanupStandbyHygiene: () => unknown }).cleanupStandbyHygiene();
+    }
   }
 
   protected sleep(ms: number): Promise<void> {

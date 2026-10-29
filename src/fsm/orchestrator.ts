@@ -516,21 +516,32 @@ export class FailoverOrchestrator {
     this.standby.onStatusChange((status) => {
       if (this.isShuttingDown) return;
 
-      if (
-        this.state === "FALLBACK_ACTIVE" &&
-        (status.state === "ERROR" || status.state === "DISCONNECTED" || status.state === "UNPAIRED")
-      ) {
-        this.lastError = status.error ?? `Standby driver status changed to ${status.state}`;
-        logger.error(
-          { status, state: this.state },
-          "Standby driver degraded or disconnected during FALLBACK_ACTIVE",
-        );
+      if (this.state === "FALLBACK_ACTIVE") {
+        if (status.state === "CONNECTED") {
+          logger.info("Standby driver connected/recovered; flushing outbound buffer");
+          void this.flushOutboundBuffer();
+        } else if (status.state === "DEGRADED") {
+          logger.warn(
+            { status },
+            "Standby driver degraded (recovering); outbound messages will buffer",
+          );
+        } else if (
+          status.state === "ERROR" ||
+          status.state === "DISCONNECTED" ||
+          status.state === "UNPAIRED"
+        ) {
+          this.lastError = status.error ?? `Standby driver status changed to ${status.state}`;
+          logger.error(
+            { status, state: this.state },
+            "Standby driver degraded or disconnected during FALLBACK_ACTIVE",
+          );
 
-        if (this.primary.getStatus().connected) {
-          logger.info("Primary driver is connected; triggering immediate failback recovery");
-          void this.triggerFailback("Standby crashed and primary is healthy");
-        } else {
-          void this.executeSilentProbe();
+          if (this.primary.getStatus().connected) {
+            logger.info("Primary driver is connected; triggering immediate failback recovery");
+            void this.triggerFailback("Standby crashed and primary is healthy");
+          } else {
+            void this.executeSilentProbe();
+          }
         }
       }
     });
@@ -593,7 +604,8 @@ export class FailoverOrchestrator {
     return (
       this.state === "FENCING" ||
       this.state === "COLD_START_STANDBY" ||
-      this.state === "RECOVERY_SWAP"
+      this.state === "RECOVERY_SWAP" ||
+      (this.state === "FALLBACK_ACTIVE" && this.standby.getStatus().state === "DEGRADED")
     );
   }
 
