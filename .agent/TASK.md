@@ -7,19 +7,18 @@
 
 ## Active Task
 
-### [90.4] Shutdown Lifecycle Ordering & Buffer Safety
+### [90.5] Observability & Prometheus Metrics Exporter
 
 **Status:** PLANNING
-**Objective:** Ensure `orchestrator.shutdown()` cancels/rejects in-flight buffer before or during worker shutdown to prevent deadlock on exit, and ensure `CircuitBreaker.consecutiveFailures` window decay consistency.
+**Objective:** Export a real-time Prometheus metrics endpoint (`/metrics`) exposing failover count, engine latencies, buffer depth, queue lengths, and DLQ counters without leaking secrets.
 
 **Plan:**
-1. Shutdown Lifecycle Ordering & Buffer Drain:
-   - Audit `orchestrator.shutdown()` and `gateway.ts` shutdown sequence.
-   - When the orchestrator enters `SHUTDOWN`, reject or drain pending buffer items with a descriptive cancellation error so callers do not hang indefinitely awaiting transitions that will never happen.
-2. Circuit Breaker Failure Window Decay:
-   - Verify `CircuitBreaker.consecutiveFailures` window decay consistency and reset mechanics under sustained error vs idle periods.
+1. Prometheus Metrics Formulation:
+   - Expose counter and gauge metrics following Prometheus formatting (`failover_events_total`, `outbound_buffer_depth`, `engine_status`, `queue_length`, `dlq_messages_total`).
+2. HTTP Route Exposure:
+   - Wire `/metrics` route into `GatewayHttpServer`.
 3. Tests & Verification:
-   - Add unit/lifecycle tests for shutdown buffer drainage without hanging promises and circuit breaker decay consistency.
+   - Validate Prometheus scrape text format, strict types, and integration with `HealthService`.
 
 ---
 
@@ -43,13 +42,14 @@
 | [90.1] | Hermetic Redis Test Fallback & E2E Resilience Decoupling | [`8485c62`] | 2026-10-29 |
 | [90.2] | Driver Stability & Lifecycle Hardening | [`917937d`] | 2026-10-29 |
 | [90.3] | Atomic Lua Deduplication & Media Digest Parity | [`07f4807`] | 2026-10-29 |
+| [90.4] | Shutdown Lifecycle Ordering & Buffer Safety | [`1e70ce7`] | 2026-10-29 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- [90.5] Observability & Prometheus Metrics Exporter
-  - Export real-time Prometheus metrics endpoint (`/metrics`) for failover count, engine latencies, buffer depth, and DLQ counters.
+- [90.6] Dynamic Chromium Health & Standby Puppeteer Restart Recovery
+  - Detect and recover zombie Chromium processes during extended standby periods.
 
 ---
 
