@@ -22,6 +22,14 @@ export interface BaileysDriverOptions {
   readonly authStateLoader?: (
     authDir: string,
   ) => Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }>;
+  readonly sendMessageTimeoutMs?: number;
+}
+
+export class BaileysSendTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Baileys sendMessage timed out after ${timeoutMs}ms`);
+    this.name = "BaileysSendTimeoutError";
+  }
 }
 
 interface BoomLikeError {
@@ -46,6 +54,7 @@ export class BaileysDriver implements IWhatsAppDriver {
   private readonly authStateLoader: (
     authDir: string,
   ) => Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }>;
+  private readonly sendMessageTimeoutMs: number;
 
   private socket: WASocket | null = null;
   private qrCode: string | undefined = undefined;
@@ -63,6 +72,11 @@ export class BaileysDriver implements IWhatsAppDriver {
     this.logger = options.logger ?? defaultLogger;
     this.socketFactory = options.socketFactory ?? makeWASocket;
     this.authStateLoader = options.authStateLoader ?? useMultiFileAuthState;
+    this.sendMessageTimeoutMs =
+      options.sendMessageTimeoutMs ??
+      (process.env.SEND_MESSAGE_TIMEOUT_MS
+        ? Number.parseInt(process.env.SEND_MESSAGE_TIMEOUT_MS, 10)
+        : 15000);
   }
 
   public getStatus(): EngineStatus {
@@ -160,15 +174,30 @@ export class BaileysDriver implements IWhatsAppDriver {
     const targetJid = this.normalizeJid(to);
     const baileysContent = mapOutboundToBaileysContent(content);
 
-    const sent = await this.socket.sendMessage(targetJid, baileysContent);
-    const messageId = sent?.key?.id ?? randomUUID();
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new BaileysSendTimeoutError(this.sendMessageTimeoutMs));
+        }, this.sendMessageTimeoutMs);
+        timer.unref?.();
+      });
 
-    return {
-      id: messageId,
-      to,
-      timestamp: Date.now(),
-      status: "SENT",
-    };
+      const sendPromise = this.socket.sendMessage(targetJid, baileysContent);
+      const sent = await Promise.race([sendPromise, timeoutPromise]);
+      const messageId = sent?.key?.id ?? randomUUID();
+
+      return {
+        id: messageId,
+        to,
+        timestamp: Date.now(),
+        status: "SENT",
+      };
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   private handleConnectionUpdate(update: Partial<ConnectionState>): void {

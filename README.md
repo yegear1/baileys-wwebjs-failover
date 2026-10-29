@@ -63,6 +63,9 @@ stateDiagram-v2
 - **Circuit Breaker & Fencing:** Strictly terminates the failing primary engine before promoting fallback, avoiding split-brain message delivery.
 - **Anti-Fingerprinting Standby Keep-Alive:** Periodic maintenance wakes WWebJS with randomized jitter (every 3–5 days) and dynamic text to prevent WhatsApp multi-device idle logouts.
 - **Inbound Deduplication:** Atomic Redis deduplication guarantees at-most-once processing during failover transitions.
+- **Deterministic Socket Hang Prevention:** Enforces a configurable 15s timeout (`SEND_MESSAGE_TIMEOUT_MS`) on Baileys send operations to avoid unbounded socket stalls.
+- **Host WAN Connectivity Guard:** Validates host internet reachability before initiating failovers, preventing false Chromium wakeups during host network outages.
+- **Zero-Loss Queueing & Dead-Letter Queue (DLQ):** Automatically re-queues transient send failures with backoff tracking, routing exhausted or malformed messages to `whatsapp:send:dlq`.
 
 ## Quickstart
 
@@ -91,6 +94,10 @@ cp .env.example .env
 | `PUPPETEER_EXECUTABLE_PATH` | Path to Chromium executable | `/usr/bin/chromium` | No |
 | `FAILOVER_ERROR_THRESHOLD` | Consecutive errors before triggering failover | `3` | No |
 | `PROBE_STABILITY_WINDOW_SEC` | Seconds Baileys must remain stable before failback | `300` | No |
+| `ENABLE_HOST_CONNECTIVITY_GUARD` | Verify host WAN connectivity before failover | `true` | No |
+| `SEND_MESSAGE_TIMEOUT_MS` | Timeout in ms for Baileys socket send operations | `15000` | No |
+| `MAX_SEND_RETRIES` | Maximum retry attempts for failed outbound messages | `3` | No |
+| `DLQ_QUEUE_KEY` | Redis queue key for exhausted/malformed dead-letter items | `whatsapp:send:dlq` | No |
 | `KEEPALIVE_INTERVAL_DAYS_MIN` | Minimum days between standby keep-alive pings | `3` | No |
 | `KEEPALIVE_INTERVAL_DAYS_MAX` | Maximum days between standby keep-alive pings | `5` | No |
 | `INBOX_QUEUE_KEY` | Redis queue key for incoming normalized messages | `whatsapp:receive:inbox` | No |

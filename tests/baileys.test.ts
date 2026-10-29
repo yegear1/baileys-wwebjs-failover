@@ -10,6 +10,7 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import {
   BaileysDriver,
+  BaileysSendTimeoutError,
   ensureSecureAuthDirectory,
   mapBaileysMessageToInbound,
   mapOutboundToBaileysContent,
@@ -326,6 +327,43 @@ describe("BaileysDriver", () => {
       expect(receipt.id).toBe("mock-wa-msg-id");
       expect(receipt.status).toBe("SENT");
       expect(receipt.to).toBe("5511999999999");
+    } finally {
+      await driver.disconnect();
+      rmSync(tempParent, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts with BaileysSendTimeoutError when socket sendMessage hangs beyond timeout", async () => {
+    const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-send-timeout-"));
+    const authDir = join(tempParent, "creds");
+    const { sock, ev } = createMockSocket();
+
+    // Socket sendMessage hangs indefinitely
+    sock.sendMessage = vi.fn().mockImplementation(() => new Promise(() => {}));
+
+    const driver = new BaileysDriver({
+      authDir,
+      sendMessageTimeoutMs: 50,
+      authStateLoader: vi.fn().mockResolvedValue({
+        state: {} as AuthenticationState,
+        saveCreds: vi.fn(),
+      }),
+      socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+        config: UserFacingSocketConfig,
+      ) => WASocket,
+    });
+
+    try {
+      await driver.connect();
+      ev.emit("connection.update", { connection: "open" });
+
+      await expect(
+        driver.sendMessage("5511999999999", {
+          to: "5511999999999",
+          type: "text",
+          text: "Will hang",
+        }),
+      ).rejects.toThrow(BaileysSendTimeoutError);
     } finally {
       await driver.disconnect();
       rmSync(tempParent, { recursive: true, force: true });

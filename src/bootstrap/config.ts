@@ -17,8 +17,12 @@ export const GatewayConfigSchema = z
     selfChatJid: z.string().optional(),
     inboxQueueKey: z.string().min(1).default("whatsapp:receive:inbox"),
     outboundQueueKey: z.string().min(1).default("whatsapp:send:priority"),
+    dlqQueueKey: z.string().min(1).default("whatsapp:send:dlq"),
     fencingLockKey: z.string().min(1).default("gateway:active_engine"),
     blpopTimeoutSeconds: z.coerce.number().min(0.01).default(2),
+    sendMessageTimeoutMs: z.coerce.number().int().min(1000).default(15000),
+    maxSendRetries: z.coerce.number().int().min(1).default(3),
+    enableHostConnectivityGuard: z.coerce.boolean().default(true),
     shutdownTimeoutMs: z.coerce.number().int().min(1000).default(10000),
   })
   .refine((data) => data.keepaliveIntervalDaysMin <= data.keepaliveIntervalDaysMax, {
@@ -50,8 +54,12 @@ export function loadGatewayConfig(
     selfChatJid: env.SELF_CHAT_JID,
     inboxQueueKey: env.INBOX_QUEUE_KEY,
     outboundQueueKey: env.OUTBOUND_QUEUE_KEY,
+    dlqQueueKey: env.DLQ_QUEUE_KEY,
     fencingLockKey: env.FENCING_LOCK_KEY,
     blpopTimeoutSeconds: env.BLPOP_TIMEOUT_SECONDS,
+    sendMessageTimeoutMs: env.SEND_MESSAGE_TIMEOUT_MS,
+    maxSendRetries: env.MAX_SEND_RETRIES,
+    enableHostConnectivityGuard: env.ENABLE_HOST_CONNECTIVITY_GUARD,
     shutdownTimeoutMs: env.SHUTDOWN_TIMEOUT_MS,
   });
 }

@@ -21,6 +21,8 @@ export interface RedisQueueManagerOptions {
   readonly orchestrator: FailoverOrchestrator;
   readonly inboxQueueKey?: string | undefined;
   readonly outboundQueueKey?: string | undefined;
+  readonly dlqQueueKey?: string | undefined;
+  readonly maxSendRetries?: number | undefined;
   readonly dedupPrefix?: string | undefined;
   readonly dedupTtlSeconds?: number | undefined;
   readonly blpopTimeoutSeconds?: number | undefined;
@@ -81,6 +83,8 @@ export class RedisQueueManager {
       client: this.blockingClient,
       orchestrator: this.orchestrator,
       outboundQueueKey: options.outboundQueueKey ?? DEFAULT_OUTBOUND_QUEUE,
+      dlqQueueKey: options.dlqQueueKey,
+      maxSendRetries: options.maxSendRetries,
       blpopTimeoutSeconds: options.blpopTimeoutSeconds ?? DEFAULT_BLPOP_TIMEOUT_SECONDS,
       pauseCheckIntervalMs: options.pauseCheckIntervalMs ?? 500,
     });

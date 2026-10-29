@@ -19,6 +19,8 @@ export interface GatewayApplicationOptions {
   readonly redisClient?: IRedisClient | undefined;
   readonly blockingRedisClient?: IRedisClient | undefined;
   readonly disableBackgroundProbeTimer?: boolean | undefined;
+  readonly hostConnectivityProbe?: (() => Promise<boolean>) | undefined;
+  readonly enableHostConnectivityGuard?: boolean | undefined;
   readonly onExit?: ((code: number) => void) | undefined;
 }
 
@@ -69,6 +71,7 @@ export class GatewayApplication {
       new BaileysDriver({
         authDir: this.config.authDirBaileys,
         printQR: false,
+        sendMessageTimeoutMs: this.config.sendMessageTimeoutMs,
       });
 
     this.standbyDriver =
@@ -93,6 +96,11 @@ export class GatewayApplication {
         windowMs: this.config.probeStabilityWindowSec * 1000,
       },
       probeIntervalMs: this.config.probeIntervalMs,
+      enableHostConnectivityGuard:
+        options.enableHostConnectivityGuard ?? this.config.enableHostConnectivityGuard,
+      ...(options.hostConnectivityProbe
+        ? { hostConnectivityProbe: options.hostConnectivityProbe }
+        : {}),
       ...(options.disableBackgroundProbeTimer !== undefined
         ? { disableBackgroundProbeTimer: options.disableBackgroundProbeTimer }
         : {}),
@@ -104,6 +112,8 @@ export class GatewayApplication {
       orchestrator: this.orchestrator,
       inboxQueueKey: this.config.inboxQueueKey,
       outboundQueueKey: this.config.outboundQueueKey,
+      dlqQueueKey: this.config.dlqQueueKey,
+      maxSendRetries: this.config.maxSendRetries,
       blpopTimeoutSeconds: this.config.blpopTimeoutSeconds,
     });
 

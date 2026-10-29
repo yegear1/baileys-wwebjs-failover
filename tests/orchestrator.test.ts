@@ -462,4 +462,58 @@ describe("FailoverOrchestrator", () => {
     await orchestrator.shutdown();
     await expect(sendPromise).rejects.toThrow("FailoverOrchestrator is shutting down");
   });
+
+  it("suppresses failover to WWebJS standby when host connectivity probe reports offline", async () => {
+    const primary = new MockWhatsAppDriver("baileys");
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const hostProbe = vi.fn().mockResolvedValue(false);
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver: primary,
+      standbyDriver: standby,
+      disableBackgroundProbeTimer: true,
+      enableHostConnectivityGuard: true,
+      hostConnectivityProbe: hostProbe,
+    });
+
+    await orchestrator.start();
+    expect(orchestrator.getState()).toBe("PRIMARY_ACTIVE");
+
+    // Attempt to trigger failover (e.g. WAN outage dropped socket)
+    await orchestrator.triggerFailover("Primary socket dropped during WAN outage");
+
+    expect(hostProbe).toHaveBeenCalled();
+    // Must remain PRIMARY_ACTIVE and not touch standby
+    expect(orchestrator.getState()).toBe("PRIMARY_ACTIVE");
+    expect(orchestrator.getActiveEngine()).toBe("baileys");
+    expect(standby.connectCalls).toBe(0);
+
+    await orchestrator.shutdown();
+  });
+
+  it("allows failover to proceed when host connectivity probe reports online", async () => {
+    const primary = new MockWhatsAppDriver("baileys");
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const hostProbe = vi.fn().mockResolvedValue(true);
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver: primary,
+      standbyDriver: standby,
+      disableBackgroundProbeTimer: true,
+      enableHostConnectivityGuard: true,
+      hostConnectivityProbe: hostProbe,
+    });
+
+    await orchestrator.start();
+    expect(orchestrator.getState()).toBe("PRIMARY_ACTIVE");
+
+    await orchestrator.triggerFailover("Primary socket degraded while internet is active");
+
+    expect(hostProbe).toHaveBeenCalled();
+    expect(orchestrator.getState()).toBe("FALLBACK_ACTIVE");
+    expect(orchestrator.getActiveEngine()).toBe("wwebjs");
+    expect(standby.connectCalls).toBe(1);
+
+    await orchestrator.shutdown();
+  });
 });

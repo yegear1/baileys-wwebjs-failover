@@ -497,6 +497,66 @@ describe("RedisOutboundWorker & Failover Backpressure", () => {
 
     expect(worker.getMetrics().errorCount).toBe(2);
     expect(worker.getMetrics().processedCount).toBe(0);
+    expect(worker.getMetrics().dlqCount).toBe(2);
+
+    const dlqList = client.listStore.get("whatsapp:send:dlq") ?? [];
+    expect(dlqList.length).toBe(2);
+
+    await worker.stop();
+    await orchestrator.shutdown();
+  });
+
+  it("re-queues failed outbound messages up to maxSendRetries then pushes to DLQ on exhaustion", async () => {
+    const primaryDriver = new MockWhatsAppDriver("baileys");
+    const standbyDriver = new MockWhatsAppDriver("wwebjs");
+    primaryDriver.shouldFailSend = true;
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver,
+      standbyDriver,
+      disableBackgroundProbeTimer: true,
+      circuitBreakerOptions: { failureThreshold: 10 },
+    });
+    await orchestrator.start();
+
+    const client = new MockRedisClient();
+    const worker = new RedisOutboundWorker({
+      client,
+      orchestrator,
+      outboundQueueKey: "whatsapp:send:priority",
+      dlqQueueKey: "whatsapp:send:dlq",
+      maxSendRetries: 3,
+      blpopTimeoutSeconds: 0.05,
+    });
+
+    worker.start();
+
+    await client.lPush(
+      "whatsapp:send:priority",
+      JSON.stringify({
+        to: "5511999998888@c.us",
+        type: "text",
+        text: "Will fail and retry",
+      }),
+    );
+
+    await vi.waitFor(
+      () => {
+        expect(worker.getMetrics().dlqCount).toBe(1);
+      },
+      { timeout: 1500, interval: 20 },
+    );
+
+    expect(worker.getMetrics().requeuedCount).toBe(2);
+    expect(worker.getMetrics().dlqCount).toBe(1);
+
+    const dlqList = client.listStore.get("whatsapp:send:dlq") ?? [];
+    expect(dlqList.length).toBe(1);
+    const dlqRaw = dlqList[0];
+    expect(dlqRaw).toBeDefined();
+    const dlqItem = JSON.parse(String(dlqRaw));
+    expect(dlqItem.retryCount).toBe(3);
+    expect(dlqItem.dlqReason).toContain("Max send retries (3) exceeded");
 
     await worker.stop();
     await orchestrator.shutdown();

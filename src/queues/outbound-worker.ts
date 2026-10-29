@@ -4,6 +4,8 @@ import type { FailoverState } from "../fsm/types.js";
 import { logger } from "../index.js";
 import {
   DEFAULT_BLPOP_TIMEOUT_SECONDS,
+  DEFAULT_DLQ_QUEUE,
+  DEFAULT_MAX_SEND_RETRIES,
   DEFAULT_OUTBOUND_QUEUE,
   type IRedisClient,
   type NormalizedOutboundRequest,
@@ -16,6 +18,8 @@ export interface RedisOutboundWorkerOptions {
   readonly client: IRedisClient;
   readonly orchestrator: FailoverOrchestrator;
   readonly outboundQueueKey?: string | undefined;
+  readonly dlqQueueKey?: string | undefined;
+  readonly maxSendRetries?: number | undefined;
   readonly blpopTimeoutSeconds?: number | undefined;
   readonly pauseCheckIntervalMs?: number | undefined;
 }
@@ -49,6 +53,7 @@ export function normalizeOutboundPayload(raw: unknown): NormalizedOutboundReques
       id: parsed.id ?? undefined,
       to,
       content,
+      retryCount: parsed.retryCount,
     };
   }
 
@@ -64,6 +69,7 @@ export function normalizeOutboundPayload(raw: unknown): NormalizedOutboundReques
     id: parsed.id ?? undefined,
     to,
     content,
+    retryCount: parsed.retryCount,
   };
 }
 
@@ -78,6 +84,8 @@ export class RedisOutboundWorker {
   private readonly client: IRedisClient;
   private readonly orchestrator: FailoverOrchestrator;
   private readonly outboundQueueKey: string;
+  private readonly dlqQueueKey: string;
+  private readonly maxSendRetries: number;
   private readonly blpopTimeoutSeconds: number;
   private readonly pauseCheckIntervalMs: number;
 
@@ -89,6 +97,8 @@ export class RedisOutboundWorker {
 
   private processedCount = 0;
   private errorCount = 0;
+  private requeuedCount = 0;
+  private dlqCount = 0;
   private lastProcessedAt?: Date | undefined = undefined;
   private lastError?: string | undefined = undefined;
 
@@ -96,6 +106,8 @@ export class RedisOutboundWorker {
     this.client = options.client;
     this.orchestrator = options.orchestrator;
     this.outboundQueueKey = options.outboundQueueKey ?? DEFAULT_OUTBOUND_QUEUE;
+    this.dlqQueueKey = options.dlqQueueKey ?? DEFAULT_DLQ_QUEUE;
+    this.maxSendRetries = options.maxSendRetries ?? DEFAULT_MAX_SEND_RETRIES;
     this.blpopTimeoutSeconds = options.blpopTimeoutSeconds ?? DEFAULT_BLPOP_TIMEOUT_SECONDS;
     this.pauseCheckIntervalMs = options.pauseCheckIntervalMs ?? 500;
   }
@@ -153,6 +165,8 @@ export class RedisOutboundWorker {
       isPaused: this.isPaused,
       processedCount: this.processedCount,
       errorCount: this.errorCount,
+      requeuedCount: this.requeuedCount,
+      dlqCount: this.dlqCount,
       lastProcessedAt: this.lastProcessedAt,
       lastError: this.lastError,
     };
@@ -226,9 +240,10 @@ export class RedisOutboundWorker {
     } catch (parseErr) {
       this.errorCount += 1;
       this.lastError = `JSON parse failure: ${String(parseErr)}`;
+      await this.pushToDlq(rawString, `JSON parse failure: ${String(parseErr)}`);
       logger.error(
-        { rawString, err: parseErr },
-        "Dropped malformed non-JSON payload from outbound queue",
+        { rawString, err: parseErr, dlqQueueKey: this.dlqQueueKey },
+        "Moved malformed non-JSON payload from outbound queue to DLQ",
       );
       return;
     }
@@ -239,9 +254,10 @@ export class RedisOutboundWorker {
     } catch (schemaErr) {
       this.errorCount += 1;
       this.lastError = `Schema validation failure: ${String(schemaErr)}`;
+      await this.pushToDlq(rawJson, `Schema validation failure: ${String(schemaErr)}`);
       logger.error(
-        { rawJson, err: schemaErr },
-        "Dropped payload failing OutboundQueuePayloadSchema validation",
+        { rawJson, err: schemaErr, dlqQueueKey: this.dlqQueueKey },
+        "Moved payload failing OutboundQueuePayloadSchema validation to DLQ",
       );
       return;
     }
@@ -271,16 +287,76 @@ export class RedisOutboundWorker {
         "Outbound message successfully dispatched",
       );
     } catch (dispatchErr) {
-      this.errorCount += 1;
-      this.lastError = dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr);
+      await this.handleDispatchFailure(request, rawJson, dispatchErr);
+    }
+  }
 
+  private async pushToDlq(payload: unknown, reason: string): Promise<void> {
+    this.dlqCount += 1;
+    const dlqPayload = {
+      ...(typeof payload === "object" && payload !== null ? payload : { raw: payload }),
+      dlqReason: reason,
+      dlqTimestamp: new Date().toISOString(),
+    };
+    try {
+      await this.client.lPush(this.dlqQueueKey, JSON.stringify(dlqPayload));
+    } catch (err) {
+      logger.error({ err, dlqQueueKey: this.dlqQueueKey }, "Failed pushing payload to DLQ");
+    }
+  }
+
+  private async handleDispatchFailure(
+    request: NormalizedOutboundRequest,
+    rawJson: unknown,
+    dispatchErr: unknown,
+  ): Promise<void> {
+    this.errorCount += 1;
+    const errorMessage = dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr);
+    this.lastError = errorMessage;
+
+    const currentRetries = request.retryCount ?? 0;
+    const nextRetries = currentRetries + 1;
+
+    if (nextRetries < this.maxSendRetries) {
+      const requeuePayload = {
+        ...(typeof rawJson === "object" && rawJson !== null ? rawJson : {}),
+        retryCount: nextRetries,
+        lastError: errorMessage,
+        requeuedAt: new Date().toISOString(),
+      };
+      try {
+        await this.client.lPush(this.outboundQueueKey, JSON.stringify(requeuePayload));
+        this.requeuedCount += 1;
+        logger.warn(
+          {
+            id: request.id,
+            to: request.to,
+            retryCount: nextRetries,
+            maxSendRetries: this.maxSendRetries,
+            err: dispatchErr,
+          },
+          "Outbound message dispatch failed; re-queued to priority outbound queue",
+        );
+      } catch (err) {
+        logger.error({ err }, "Failed re-queueing outbound message to Redis");
+      }
+    } else {
+      await this.pushToDlq(
+        {
+          ...(typeof rawJson === "object" && rawJson !== null ? rawJson : {}),
+          retryCount: nextRetries,
+        },
+        `Max send retries (${this.maxSendRetries}) exceeded: ${errorMessage}`,
+      );
       logger.error(
         {
           id: request.id,
           to: request.to,
+          dlqQueueKey: this.dlqQueueKey,
+          retryCount: nextRetries,
           err: dispatchErr,
         },
-        "Failed to dispatch outbound message via orchestrator",
+        "Outbound message exceeded max send retries; moved to DLQ",
       );
     }
   }

@@ -78,6 +78,8 @@ class MockQueueManager {
       isPaused: false,
       processedCount: 45,
       errorCount: 0,
+      requeuedCount: 0,
+      dlqCount: 0,
     },
   };
 

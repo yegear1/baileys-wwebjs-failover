@@ -56,11 +56,17 @@ export interface IWhatsAppDriver {
 | `dedupe:msg:<hash>` | Inbound Deduplication | Key flag (`"1"`) | 300 seconds (`EX 300`) | At-most-once processing filter |
 | `whatsapp:receive:inbox` | Normalized Incoming Messages | Redis Queue (`LPUSH`) | `InboundMessagePayload` | Consumed by downstream workers |
 | `whatsapp:send:priority` | Outbound Message Dispatch | Redis Queue (`BLPOP`) | `SendMessagePayload` | Consumed strictly by active engine |
+| `whatsapp:send:dlq` | Dead Letter Queue | Redis Queue (`LPUSH`) | Exhausted / malformed payloads | Unroutable messages after 3 retries |
 
 **Deduplication Hash Algorithm:**
 $$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textBody} \parallel \text{mediaDigest}) + \lfloor\text{timestamp} / 10\rfloor)$$
 * Absorbs $\pm 5\text{s}$ cross-device socket clock skew.
 * Media messages use content SHA-256 or WhatsApp file hash instead of empty body.
+
+**Outbound Reliability & WAN Invariants:**
+* Baileys send operations race against a deterministic 15s timeout (`SEND_MESSAGE_TIMEOUT_MS`).
+* Transient outbound dispatch failures are re-queued up to `MAX_SEND_RETRIES` (default: 3) before routing to `DLQ_QUEUE_KEY`.
+* Host network WAN connectivity probe validates internet reachability prior to WWebJS standby activation, preventing false failover during host internet outages.
 
 ---
 

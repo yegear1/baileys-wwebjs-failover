@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createClient } from "redis";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayApplication, loadGatewayConfig } from "../src/bootstrap/index.js";
 import type { EngineName, EngineStatus, IWhatsAppDriver } from "../src/contracts/driver.js";
 import type { InboundMessage, MessageReceipt, OutboundMessage } from "../src/contracts/messages.js";
@@ -292,6 +292,7 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
       INBOX_QUEUE_KEY: inboxKey,
       OUTBOUND_QUEUE_KEY: outboundKey,
       FENCING_LOCK_KEY: fencingKey,
+      ENABLE_HOST_CONNECTIVITY_GUARD: "false",
     });
 
     const app = new GatewayApplication({
@@ -313,9 +314,10 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
       const failoverPromise = orchestrator.triggerFailover("Backpressure test trip");
 
       // Give event loop tick to enter FENCING or COLD_START_STANDBY
-      await new Promise((r) => setTimeout(r, 20));
-      const midState = orchestrator.getState();
-      expect(["FENCING", "COLD_START_STANDBY"]).toContain(midState);
+      await vi.waitFor(() => {
+        const midState = orchestrator.getState();
+        expect(["FENCING", "COLD_START_STANDBY"]).toContain(midState);
+      });
 
       // Inject 3 priority messages during transitional delay
       await directClient.lPush(
@@ -437,6 +439,77 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
         const parsed = JSON.parse(popped);
         expect(parsed.id).toBe("msg_live_dedup_001");
         expect(parsed.textBody).toBe("Real Redis deduplication test message");
+      }
+    } finally {
+      await directClient.quit();
+      await app.stop();
+    }
+  });
+
+  it("re-queues outbound messages on driver send failure and routes to DLQ on max retries in real Redis", async () => {
+    const testId = `dlq_${Date.now()}`;
+    const inboxKey = `whatsapp:receive:inbox:${testId}`;
+    const outboundKey = `whatsapp:send:priority:${testId}`;
+    const dlqKey = `whatsapp:send:dlq:${testId}`;
+    const fencingKey = `gateway:active_engine:${testId}`;
+
+    const primaryDriver = new ControllableMockDriver("baileys");
+    const standbyDriver = new ControllableMockDriver("wwebjs");
+    primaryDriver.shouldFailSend = true;
+
+    const config = loadGatewayConfig({
+      PORT: "0",
+      REDIS_URL: redisEnv.url,
+      AUTH_DIR_BAILEYS: authBaileys,
+      AUTH_DIR_WWEBJS: authWWebJS,
+      INBOX_QUEUE_KEY: inboxKey,
+      OUTBOUND_QUEUE_KEY: outboundKey,
+      DLQ_QUEUE_KEY: dlqKey,
+      FENCING_LOCK_KEY: fencingKey,
+      MAX_SEND_RETRIES: "3",
+      BLPOP_TIMEOUT_SECONDS: "0.1",
+      FAILOVER_ERROR_THRESHOLD: "10",
+    });
+
+    const app = new GatewayApplication({
+      config,
+      primaryDriver,
+      standbyDriver,
+      disableBackgroundProbeTimer: true,
+    });
+
+    await app.start();
+
+    const directClient = createClient({ url: redisEnv.url });
+    await directClient.connect();
+
+    try {
+      await directClient.lPush(
+        outboundKey,
+        JSON.stringify({
+          to: "5511999998888@c.us",
+          type: "text",
+          text: "E2E DLQ Resilience Test",
+        }),
+      );
+
+      let dlqLength = 0;
+      let attempts = 0;
+      while (dlqLength === 0 && attempts < 30) {
+        await new Promise((r) => setTimeout(r, 100));
+        dlqLength = await directClient.lLen(dlqKey);
+        attempts++;
+      }
+
+      expect(dlqLength).toBe(1);
+
+      const dlqRaw = await directClient.rPop(dlqKey);
+      expect(dlqRaw).not.toBeNull();
+      if (dlqRaw) {
+        const parsed = JSON.parse(dlqRaw);
+        expect(parsed.retryCount).toBe(3);
+        expect(parsed.dlqReason).toContain("Max send retries (3) exceeded");
+        expect(parsed.to).toBe("5511999998888@c.us");
       }
     } finally {
       await directClient.quit();

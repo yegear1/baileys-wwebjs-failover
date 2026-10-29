@@ -1,6 +1,7 @@
 import type { EngineName, IWhatsAppDriver } from "../contracts/driver.js";
 import type { InboundMessage, MessageReceipt, OutboundMessage } from "../contracts/messages.js";
 import { logger } from "../index.js";
+import { checkHostConnectivity } from "../utils/host-connectivity.js";
 import { CircuitBreaker, type CircuitBreakerOptions } from "./circuit-breaker.js";
 import { type IFencingLock, InMemoryFencingLock } from "./fencing.js";
 import type {
@@ -32,6 +33,16 @@ export interface FailoverOrchestratorOptions {
    * Default: false.
    */
   readonly disableBackgroundProbeTimer?: boolean;
+  /**
+   * Optional custom probe to check host WAN internet connectivity.
+   * Default: checkHostConnectivity()
+   */
+  readonly hostConnectivityProbe?: () => Promise<boolean>;
+  /**
+   * Whether to check host connectivity before triggering failover.
+   * Default: true if hostConnectivityProbe is provided, false if plain unit test, or true when configured.
+   */
+  readonly enableHostConnectivityGuard?: boolean;
 }
 
 export class FailoverOrchestrator {
@@ -41,6 +52,8 @@ export class FailoverOrchestrator {
   private readonly circuitBreaker: CircuitBreaker;
   private readonly probeIntervalMs: number;
   private readonly disableBackgroundProbeTimer: boolean;
+  private readonly hostConnectivityProbe: () => Promise<boolean>;
+  private readonly enableHostConnectivityGuard: boolean;
 
   private state: FailoverState = "PRIMARY_ACTIVE";
   private activeEngine: EngineName | null = "baileys";
@@ -61,6 +74,9 @@ export class FailoverOrchestrator {
     this.circuitBreaker = new CircuitBreaker(options.circuitBreakerOptions);
     this.probeIntervalMs = options.probeIntervalMs ?? 10_000;
     this.disableBackgroundProbeTimer = options.disableBackgroundProbeTimer ?? false;
+    this.enableHostConnectivityGuard =
+      options.enableHostConnectivityGuard ?? options.hostConnectivityProbe !== undefined;
+    this.hostConnectivityProbe = options.hostConnectivityProbe ?? checkHostConnectivity;
 
     this.setupDriverListeners();
   }
@@ -151,6 +167,26 @@ export class FailoverOrchestrator {
    */
   async triggerFailover(reason = "Failover triggered"): Promise<void> {
     if (this.isTransitioning) return;
+
+    if (this.enableHostConnectivityGuard) {
+      try {
+        const isOnline = await this.hostConnectivityProbe();
+        if (!isOnline) {
+          logger.warn(
+            { reason },
+            "Host WAN connectivity probe failed (network offline); suppressing failover to WWebJS standby",
+          );
+          return;
+        }
+      } catch (probeErr) {
+        logger.warn(
+          { probeErr, reason },
+          "Host WAN connectivity probe threw an error; treating as offline and suppressing failover",
+        );
+        return;
+      }
+    }
+
     this.isTransitioning = true;
     this.circuitBreaker.trip(reason);
 

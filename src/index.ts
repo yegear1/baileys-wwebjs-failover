@@ -44,6 +44,7 @@ export * from "./queues/manager.js";
 export * from "./queues/outbound-worker.js";
 export * from "./queues/types.js";
 export * from "./utils/dedup.js";
+export * from "./utils/host-connectivity.js";
 
 // Automatically invoke if executed directly via node dist/index.js
 if (process.argv[1]?.endsWith("index.js")) {

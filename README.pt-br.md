@@ -63,6 +63,9 @@ stateDiagram-v2
 - **Circuit Breaker & Fencing:** Desconecta e desarma forçadamente o motor falho antes de promover o secundário, eliminando duplicidade de mensagens (split-brain).
 - **Keep-Alive Anti-Fingerprint em Standby:** Rotina de manutenção que acorda o WWebJS com variação aleatória de intervalo (3 a 5 dias) e mensagens dinâmicas para evitar a desvinculação da sessão pelo WhatsApp.
 - **Desduplicação Atômica:** Filtro atômico no Redis garante processamento *at-most-once* durante janelas de transição entre motores.
+- **Prevenção Determinística de Socket Hang:** Aplica timeout configurável de 15s (`SEND_MESSAGE_TIMEOUT_MS`) nos envios do Baileys para evitar travamentos silenciosos.
+- **Guarda de Conectividade WAN do Host:** Valida conectividade de internet antes de iniciar o failover, evitando inicialização desnecessária do Chromium durante quedas de WAN.
+- **Fila Zero-Loss e Dead-Letter Queue (DLQ):** Reenfileira automaticamente mensagens com falha transitória e direciona mensagens esgotadas ou malformadas para `whatsapp:send:dlq`.
 
 ## Início Rápido
 
@@ -91,6 +94,10 @@ cp .env.example .env
 | `PUPPETEER_EXECUTABLE_PATH` | Caminho do executável do Chromium | `/usr/bin/chromium` | Não |
 | `FAILOVER_ERROR_THRESHOLD` | Quantidade de erros consecutivos antes do failover | `3` | Não |
 | `PROBE_STABILITY_WINDOW_SEC` | Segundos de estabilidade exigidos do Baileys para failback | `300` | Não |
+| `ENABLE_HOST_CONNECTIVITY_GUARD` | Verifica conectividade WAN do host antes de executar o failover | `true` | Não |
+| `SEND_MESSAGE_TIMEOUT_MS` | Timeout em ms para operações de envio no Baileys | `15000` | Não |
+| `MAX_SEND_RETRIES` | Limite de tentativas para mensagens com falha de envio | `3` | Não |
+| `DLQ_QUEUE_KEY` | Chave da fila Redis para mensagens de saída esgotadas/malformadas | `whatsapp:send:dlq` | Não |
 | `KEEPALIVE_INTERVAL_DAYS_MIN` | Intervalo mínimo (em dias) entre pings de manutenção | `3` | Não |
 | `KEEPALIVE_INTERVAL_DAYS_MAX` | Intervalo máximo (em dias) entre pings de manutenção | `5` | Não |
 | `INBOX_QUEUE_KEY` | Chave da fila Redis para mensagens de entrada normalizadas | `whatsapp:receive:inbox` | Não |

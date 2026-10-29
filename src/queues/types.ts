@@ -9,10 +9,13 @@ import {
 
 export const DEFAULT_INBOX_QUEUE = "whatsapp:receive:inbox";
 export const DEFAULT_OUTBOUND_QUEUE = "whatsapp:send:priority";
+export const DEFAULT_DLQ_QUEUE = "whatsapp:send:dlq";
 export const DEFAULT_DEDUP_PREFIX = "dedupe:msg:";
 export const DEFAULT_FENCING_KEY = "gateway:active_engine";
 export const DEFAULT_DEDUP_TTL_SECONDS = 300;
 export const DEFAULT_BLPOP_TIMEOUT_SECONDS = 2;
+export const DEFAULT_MAX_SEND_RETRIES = 3;
+export const DEFAULT_SEND_MESSAGE_TIMEOUT_MS = 15000;
 
 /**
  * Minimal structural interface for Redis clients, matching @redis/client (redis v4)
@@ -28,6 +31,7 @@ export interface IRedisClient {
   set(key: string, value: string, options?: { NX?: boolean; EX?: number }): Promise<string | null>;
   del(key: string | string[]): Promise<number>;
   lPush(key: string, elements: string | string[]): Promise<number>;
+  rPush?(key: string, elements: string | string[]): Promise<number>;
   blPop(
     keys: string | string[],
     timeoutSeconds: number,
@@ -43,6 +47,9 @@ export const CanonicalSendPayloadSchema = z.object({
   phone_number: z.string().min(1),
   content: z.string(),
   quote_id: z.string().nullable().optional(),
+  retryCount: z.coerce.number().int().min(0).optional(),
+  lastError: z.string().optional(),
+  requeuedAt: z.string().optional(),
 });
 export type CanonicalSendPayload = z.infer<typeof CanonicalSendPayloadSchema>;
 
@@ -52,6 +59,9 @@ export type CanonicalSendPayload = z.infer<typeof CanonicalSendPayloadSchema>;
 export const NativeSendPayloadSchema = OutboundMessageSchema.extend({
   id: z.string().optional(),
   quotedMessageId: z.string().nullable().optional(),
+  retryCount: z.coerce.number().int().min(0).optional(),
+  lastError: z.string().optional(),
+  requeuedAt: z.string().optional(),
 });
 export type NativeSendPayload = z.infer<typeof NativeSendPayloadSchema>;
 
@@ -74,6 +84,7 @@ export interface NormalizedOutboundRequest {
   readonly id?: string | undefined;
   readonly to: string;
   readonly content: OutboundMessage;
+  readonly retryCount?: number | undefined;
 }
 
 /**
@@ -90,6 +101,8 @@ export interface RedisQueueOptions {
   readonly blockingClient?: IRedisClient | undefined;
   readonly inboxQueueKey?: string | undefined;
   readonly outboundQueueKey?: string | undefined;
+  readonly dlqQueueKey?: string | undefined;
+  readonly maxSendRetries?: number | undefined;
   readonly dedupPrefix?: string | undefined;
   readonly dedupTtlSeconds?: number | undefined;
   readonly blpopTimeoutSeconds?: number | undefined;
@@ -104,6 +117,8 @@ export interface OutboundWorkerMetrics {
   readonly isPaused: boolean;
   readonly processedCount: number;
   readonly errorCount: number;
+  readonly requeuedCount: number;
+  readonly dlqCount: number;
   readonly lastProcessedAt?: Date | undefined;
   readonly lastError?: string | undefined;
 }
