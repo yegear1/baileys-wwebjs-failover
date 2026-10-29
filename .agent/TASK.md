@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### 📌 Task [02.1]: Dual-Device QR Pairing & Granular Health API
+### 📌 Task [02.2]: Container Orchestration & Production Compose Stack
 
-- **Description:** Implement HTTP endpoints for pairing both sessions independently (`GET /qr/baileys`, `GET /qr/wwebjs`) and reporting multi-engine health (`GET /health`) with status diagnostics, active engine role, driver statuses, and Redis queue metrics.
-- **Systems Involved:** `http`, `health`, `qr`, `drivers`, `orchestrator`, `queues`
+- **Description:** Implement multi-stage Dockerfile and production Docker Compose configuration with Chromium shm boundaries (`shm_size: 2gb`), Redis service, volume segregation (`/data/auth/baileys`, `/data/auth/wwebjs`), healthcheck probes, and VictoriaLogs/Vector logging hygiene.
+- **Systems Involved:** `docker`, `compose`, `chromium`, `redis`, `volumes`
 - **Action Type:**
   - [ ] Read-only / Documentation
   - [x] Source code changes
@@ -18,13 +18,10 @@
   *(Workflow: `READY FOR PLANNING` → `PLANNING` on presenting plan → approval → `RUNNING`)*
 
 ### Acceptance Criteria
-- [ ] Implement `GET /health` responding with `{ status, active_engine, primary, standby, queues }` matching `.agent/NOTES.md`.
-- [ ] Implement `GET /qr/baileys` returning pairing QR code (raw text + SVG) or session status when paired.
-- [ ] Implement `GET /qr/wwebjs` returning pairing QR code (raw text + SVG) or session status when paired.
-- [ ] Strict type checking passing with zero `any` (`pnpm typecheck` exits 0).
-- [ ] Automated tests passing (`pnpm test` exits 0).
-- [ ] Linter and format checks passing (`pnpm lint` exits 0).
-- [ ] Build passes cleanly (`pnpm build` exits 0).
+- [ ] Multi-stage `Dockerfile` with Node 20 LTS, non-root user, Chromium dependencies, and minimal runtime footprint.
+- [ ] Production `docker-compose.yml` with `init: true`, `shm_size: 2gb`, segregated auth volumes, Redis 7+ service, and healthchecks.
+- [ ] Compose validation and syntax checks exit 0.
+- [ ] Documentation updated with compose deployment commands.
 
 ---
 
@@ -40,12 +37,13 @@
 | [01.4] | Failover Orchestrator & Circuit Breaker FSM | [`eb3d96b`] | 2026-10-28 |
 | [01.5] | Standby Maintenance Daemon & Anti-Fingerprinting Keep-Alive | [`289fc9a`] | 2026-10-28 |
 | [01.6] | Redis Queue Integration & Deduplication Lock | [`0ef28c3`] | 2026-10-28 |
+| [02.1] | Dual-Device QR Pairing & Granular Health API | [`632eb2b`] | 2026-10-28 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- [ ] **[02.2]** **Container Orchestration & Production Compose Stack** — Dockerfile and Compose setup with Chromium shm boundaries, Redis container, volume segregation, and Vector/VictoriaLogs integration.
+- [ ] **[03.1]** **End-to-End Gateway Integration & Service Bootstrap** — Gateway runtime entrypoint wiring together HTTP server, queue consumers, maintenance daemon, and graceful teardown hooks.
 
 ---
 
