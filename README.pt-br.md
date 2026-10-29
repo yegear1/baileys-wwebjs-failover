@@ -87,10 +87,32 @@ cp .env.example .env
 | `REDIS_URL` | URL de conexão com o Redis | `redis://127.0.0.1:6379` | Sim |
 | `AUTH_DIR_BAILEYS` | Diretório de armazenamento das credenciais do Baileys | `/data/auth/baileys` | Não |
 | `AUTH_DIR_WWEBJS` | Diretório de armazenamento do perfil do WWebJS | `/data/auth/wwebjs` | Não |
+| `PUPPETEER_EXECUTABLE_PATH` | Caminho do executável do Chromium | `/usr/bin/chromium` | Não |
 | `FAILOVER_ERROR_THRESHOLD` | Quantidade de erros consecutivos antes do failover | `3` | Não |
 | `PROBE_STABILITY_WINDOW_SEC` | Segundos de estabilidade exigidos do Baileys para failback | `300` | Não |
 | `KEEPALIVE_INTERVAL_DAYS_MIN` | Intervalo mínimo (em dias) entre pings de manutenção | `3` | Não |
 | `KEEPALIVE_INTERVAL_DAYS_MAX` | Intervalo máximo (em dias) entre pings de manutenção | `5` | Não |
+
+## Implantação com Docker
+
+O gateway inclui um Dockerfile multi-stage e uma especificação do Docker Compose de produção com higiene estrita para Chromium (`init: true`, `shm_size: 2gb`, execução como usuário não-root e volumes segregados para armazenamento de autenticação).
+
+```bash
+# Preparar arquivo de variáveis de ambiente
+cp .env.example .env
+
+# Validar integridade da configuração do compose
+docker compose -f docker-compose.yml --env-file .env.example config --quiet
+
+# Iniciar serviços do redis e gateway em background
+docker compose up -d
+
+# Inspecionar saúde e motor ativo
+curl -s http://127.0.0.1:3000/health
+
+# Acompanhar logs do gateway
+docker compose logs -f gateway
+```
 
 ## Desenvolvimento
 

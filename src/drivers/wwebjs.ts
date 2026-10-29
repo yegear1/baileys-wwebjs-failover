@@ -57,6 +57,7 @@ export interface WWebJSDriverOptions {
   readonly logger?: Logger;
   readonly chromiumArgs?: string[];
   readonly teardownTimeoutMs?: number;
+  readonly executablePath?: string;
   readonly clientFactory?: (options: pkg.ClientOptions) => WWebJSClientInterface;
 }
 
@@ -75,6 +76,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
   private readonly logger: Logger;
   private readonly chromiumArgs: string[];
   private readonly teardownTimeoutMs: number;
+  private readonly executablePath: string | undefined;
   private readonly clientFactory: (options: pkg.ClientOptions) => WWebJSClientInterface;
 
   private client: WWebJSClientInterface | null = null;
@@ -93,6 +95,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
     this.logger = options.logger ?? defaultLogger;
     this.chromiumArgs = options.chromiumArgs ?? DEFAULT_CHROMIUM_FLAGS;
     this.teardownTimeoutMs = options.teardownTimeoutMs ?? 5000;
+    this.executablePath = options.executablePath ?? process.env.PUPPETEER_EXECUTABLE_PATH;
     this.clientFactory =
       options.clientFactory ??
       ((opts: pkg.ClientOptions) => new Client(opts) as unknown as WWebJSClientInterface);
@@ -158,6 +161,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
         puppeteer: {
           headless: true,
           args: [...this.chromiumArgs],
+          ...(this.executablePath ? { executablePath: this.executablePath } : {}),
         },
         takeoverOnConflict: true,
       });

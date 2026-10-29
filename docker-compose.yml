@@ -1,0 +1,107 @@
+name: baileys-wwebjs-failover
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: baileys-wwebjs-failover:latest
+    container_name: baileys-wwebjs-failover
+    restart: unless-stopped
+    init: true
+    shm_size: 2gb
+    user: "1000:1000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: ${PORT:-3000}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      AUTH_DIR_BAILEYS: ${AUTH_DIR_BAILEYS:-/data/auth/baileys}
+      AUTH_DIR_WWEBJS: ${AUTH_DIR_WWEBJS:-/data/auth/wwebjs}
+      PUPPETEER_EXECUTABLE_PATH: ${PUPPETEER_EXECUTABLE_PATH:-/usr/bin/chromium}
+      FAILOVER_ERROR_THRESHOLD: ${FAILOVER_ERROR_THRESHOLD:-3}
+      PROBE_STABILITY_WINDOW_SEC: ${PROBE_STABILITY_WINDOW_SEC:-300}
+      KEEPALIVE_INTERVAL_DAYS_MIN: ${KEEPALIVE_INTERVAL_DAYS_MIN:-3}
+      KEEPALIVE_INTERVAL_DAYS_MAX: ${KEEPALIVE_INTERVAL_DAYS_MAX:-5}
+    ports:
+      # INVARIANT: Bind strictly to loopback interface; avoid exposing unauthenticated port to 0.0.0.0
+      - "127.0.0.1:${PORT:-3000}:3000"
+    volumes:
+      - baileys_auth:/data/auth/baileys
+      - wwebjs_auth:/data/auth/wwebjs
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+        reservations:
+          cpus: "0.2"
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - failover_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: failover-redis
+    restart: unless-stopped
+    user: "999:999"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --save
+      - "60"
+      - "1"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redis_data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - failover_net
+
+volumes:
+  baileys_auth:
+    name: failover_baileys_auth
+  wwebjs_auth:
+    name: failover_wwebjs_auth
+  redis_data:
+    name: failover_redis_data
+
+networks:
+  failover_net:
+    name: failover_internal_net
+    driver: bridge

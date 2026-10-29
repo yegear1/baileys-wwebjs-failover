@@ -518,4 +518,28 @@ describe("Container Process Hygiene & Teardown", () => {
       cleanup();
     }
   });
+
+  it("passes executablePath to clientFactory puppeteer options when provided or set in env", async () => {
+    let capturedOptions: Record<string, unknown> | undefined;
+    const tempParent = mkdtempSync(join(tmpdir(), "wwebjs-exec-"));
+    const mockClient = new MockWWebJSClient();
+
+    const driver = new WWebJSDriver({
+      authDir: join(tempParent, "auth"),
+      executablePath: "/usr/bin/custom-chromium",
+      clientFactory: (opts) => {
+        capturedOptions = opts as unknown as Record<string, unknown>;
+        return mockClient;
+      },
+    });
+
+    try {
+      await driver.connect();
+      expect(capturedOptions).toBeDefined();
+      const puppeteerOpts = capturedOptions?.puppeteer as Record<string, unknown>;
+      expect(puppeteerOpts?.executablePath).toBe("/usr/bin/custom-chromium");
+    } finally {
+      rmSync(tempParent, { recursive: true, force: true });
+    }
+  });
 });
