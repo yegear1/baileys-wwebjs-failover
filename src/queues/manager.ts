@@ -1,0 +1,163 @@
+import { RedisFencingLock } from "../fsm/fencing.js";
+import type { FailoverOrchestrator } from "../fsm/orchestrator.js";
+import { logger } from "../index.js";
+import { RedisDeduplicator } from "./dedup-lock.js";
+import { RedisInboundPublisher } from "./inbound-publisher.js";
+import { RedisOutboundWorker } from "./outbound-worker.js";
+import {
+  DEFAULT_BLPOP_TIMEOUT_SECONDS,
+  DEFAULT_DEDUP_PREFIX,
+  DEFAULT_DEDUP_TTL_SECONDS,
+  DEFAULT_INBOX_QUEUE,
+  DEFAULT_OUTBOUND_QUEUE,
+  type InboundPublisherMetrics,
+  type IRedisClient,
+  type OutboundWorkerMetrics,
+} from "./types.js";
+
+export interface RedisQueueManagerOptions {
+  readonly client: IRedisClient;
+  readonly blockingClient?: IRedisClient | undefined;
+  readonly orchestrator: FailoverOrchestrator;
+  readonly inboxQueueKey?: string | undefined;
+  readonly outboundQueueKey?: string | undefined;
+  readonly dedupPrefix?: string | undefined;
+  readonly dedupTtlSeconds?: number | undefined;
+  readonly blpopTimeoutSeconds?: number | undefined;
+  readonly pauseCheckIntervalMs?: number | undefined;
+}
+
+export interface QueueManagerStatus {
+  readonly isOpen: boolean;
+  readonly publisher: InboundPublisherMetrics;
+  readonly worker: OutboundWorkerMetrics;
+}
+
+/**
+ * Top-level manager orchestrating Redis queue pipelines:
+ * - Subscribes to inbound messages from FailoverOrchestrator and publishes deduplicated payloads to inbox
+ * - Consumes from priority outbound queue with failover backpressure awareness
+ * - Exposes distributed fencing lock and deduplicator primitives
+ */
+export class RedisQueueManager {
+  private readonly client: IRedisClient;
+  private readonly blockingClient: IRedisClient;
+  private readonly orchestrator: FailoverOrchestrator;
+
+  private readonly fencingLock: RedisFencingLock;
+  private readonly deduplicator: RedisDeduplicator;
+  private readonly publisher: RedisInboundPublisher;
+  private readonly worker: RedisOutboundWorker;
+
+  private unsubscribeInbound?: (() => void) | undefined = undefined;
+  private isStarted = false;
+
+  constructor(options: RedisQueueManagerOptions) {
+    this.client = options.client;
+    this.orchestrator = options.orchestrator;
+
+    // INVARIANT: Redis BLPOP blocks the socket connection; dedicated client required for consumers
+    this.blockingClient =
+      options.blockingClient ??
+      (typeof this.client.duplicate === "function" ? this.client.duplicate() : this.client);
+
+    this.fencingLock = new RedisFencingLock({
+      client: this.client,
+    });
+
+    this.deduplicator = new RedisDeduplicator({
+      client: this.client,
+      prefix: options.dedupPrefix ?? DEFAULT_DEDUP_PREFIX,
+      ttlSeconds: options.dedupTtlSeconds ?? DEFAULT_DEDUP_TTL_SECONDS,
+    });
+
+    this.publisher = new RedisInboundPublisher({
+      client: this.client,
+      deduplicator: this.deduplicator,
+      inboxQueueKey: options.inboxQueueKey ?? DEFAULT_INBOX_QUEUE,
+    });
+
+    this.worker = new RedisOutboundWorker({
+      client: this.blockingClient,
+      orchestrator: this.orchestrator,
+      outboundQueueKey: options.outboundQueueKey ?? DEFAULT_OUTBOUND_QUEUE,
+      blpopTimeoutSeconds: options.blpopTimeoutSeconds ?? DEFAULT_BLPOP_TIMEOUT_SECONDS,
+      pauseCheckIntervalMs: options.pauseCheckIntervalMs ?? 500,
+    });
+  }
+
+  async start(): Promise<void> {
+    if (this.isStarted) {
+      return;
+    }
+
+    if (!this.client.isOpen && typeof this.client.connect === "function") {
+      await this.client.connect();
+    }
+    if (
+      this.blockingClient !== this.client &&
+      !this.blockingClient.isOpen &&
+      typeof this.blockingClient.connect === "function"
+    ) {
+      await this.blockingClient.connect();
+    }
+
+    // Subscribe to inbound messages from the orchestrator
+    this.unsubscribeInbound = this.orchestrator.onMessage(async (msg) => {
+      await this.publisher.publish(msg);
+    });
+
+    // Start consuming outbound messages
+    this.worker.start();
+    this.isStarted = true;
+
+    logger.info("RedisQueueManager initialized and started successfully");
+  }
+
+  async stop(): Promise<void> {
+    if (!this.isStarted) {
+      return;
+    }
+    this.isStarted = false;
+
+    if (this.unsubscribeInbound) {
+      this.unsubscribeInbound();
+      this.unsubscribeInbound = undefined;
+    }
+
+    await this.worker.stop();
+
+    if (this.blockingClient !== this.client && this.blockingClient.isOpen) {
+      await this.blockingClient.disconnect();
+    }
+    if (this.client.isOpen) {
+      await this.client.disconnect();
+    }
+
+    logger.info("RedisQueueManager stopped cleanly");
+  }
+
+  getFencingLock(): RedisFencingLock {
+    return this.fencingLock;
+  }
+
+  getDeduplicator(): RedisDeduplicator {
+    return this.deduplicator;
+  }
+
+  getPublisher(): RedisInboundPublisher {
+    return this.publisher;
+  }
+
+  getWorker(): RedisOutboundWorker {
+    return this.worker;
+  }
+
+  getStatus(): QueueManagerStatus {
+    return {
+      isOpen: Boolean(this.client.isOpen ?? true),
+      publisher: this.publisher.getMetrics(),
+      worker: this.worker.getMetrics(),
+    };
+  }
+}
