@@ -69,4 +69,4 @@ EXPOSE 3000
 
 # INVARIANT: dumb-init acts as PID 1 to handle signal forwarding and reap zombie Chromium renderer processes
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/main.js"]

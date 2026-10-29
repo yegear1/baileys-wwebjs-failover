@@ -92,6 +92,11 @@ cp .env.example .env
 | `PROBE_STABILITY_WINDOW_SEC` | Seconds Baileys must remain stable before failback | `300` | No |
 | `KEEPALIVE_INTERVAL_DAYS_MIN` | Minimum days between standby keep-alive pings | `3` | No |
 | `KEEPALIVE_INTERVAL_DAYS_MAX` | Maximum days between standby keep-alive pings | `5` | No |
+| `INBOX_QUEUE_KEY` | Redis queue key for incoming normalized messages | `whatsapp:receive:inbox` | No |
+| `OUTBOUND_QUEUE_KEY` | Redis priority queue key for outgoing messages | `whatsapp:send:priority` | No |
+| `FENCING_LOCK_KEY` | Distributed Redis fencing lock key | `gateway:active_engine` | No |
+| `BLPOP_TIMEOUT_SECONDS` | Blocking timeout (seconds) for outbound Redis queue | `2` | No |
+| `SHUTDOWN_TIMEOUT_MS` | Graceful shutdown timeout in milliseconds | `10000` | No |
 
 ## Docker Deployment
 

@@ -16,6 +16,7 @@ export function getGatewayInfo(): GatewayInfo {
   };
 }
 
+export * from "./bootstrap/index.js";
 export * from "./contracts/driver.js";
 export * from "./contracts/messages.js";
 export * from "./drivers/auth-utils.js";
@@ -32,6 +33,7 @@ export * from "./http/qr-service.js";
 export * from "./http/routes.js";
 export * from "./http/server.js";
 export * from "./http/types.js";
+export * from "./main.js";
 export * from "./maintenance/daemon.js";
 export * from "./maintenance/jitter.js";
 export * from "./maintenance/payload.js";
@@ -42,3 +44,8 @@ export * from "./queues/manager.js";
 export * from "./queues/outbound-worker.js";
 export * from "./queues/types.js";
 export * from "./utils/dedup.js";
+
+// Automatically invoke if executed directly via node dist/index.js
+if (process.argv[1]?.endsWith("index.js")) {
+  void import("./main.js").then((m) => m.main());
+}

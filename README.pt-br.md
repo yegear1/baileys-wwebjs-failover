@@ -92,6 +92,11 @@ cp .env.example .env
 | `PROBE_STABILITY_WINDOW_SEC` | Segundos de estabilidade exigidos do Baileys para failback | `300` | Não |
 | `KEEPALIVE_INTERVAL_DAYS_MIN` | Intervalo mínimo (em dias) entre pings de manutenção | `3` | Não |
 | `KEEPALIVE_INTERVAL_DAYS_MAX` | Intervalo máximo (em dias) entre pings de manutenção | `5` | Não |
+| `INBOX_QUEUE_KEY` | Chave da fila Redis para mensagens de entrada normalizadas | `whatsapp:receive:inbox` | Não |
+| `OUTBOUND_QUEUE_KEY` | Chave da fila prioritária Redis para mensagens de saída | `whatsapp:send:priority` | Não |
+| `FENCING_LOCK_KEY` | Chave do lock distribuído de fencing no Redis | `gateway:active_engine` | Não |
+| `BLPOP_TIMEOUT_SECONDS` | Timeout bloqueante (segundos) na fila Redis de saída | `2` | Não |
+| `SHUTDOWN_TIMEOUT_MS` | Timeout em milissegundos para encerramento gracioso | `10000` | Não |
 
 ## Implantação com Docker
 
