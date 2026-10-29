@@ -27,6 +27,7 @@
 | [02.2] | Container Orchestration & Production Compose Stack | [`18ad2d5`] | 2026-10-28 |
 | [03.1] | End-to-End Gateway Integration & Service Bootstrap | [`63eb7d4`] | 2026-10-28 |
 | [03.2] | E2E Smoke & Resilience Verification | [`7067936`] | 2026-10-29 |
+| [03.3] | Zero-Loss Outbound Re-queue, Dead-Letter Queue & Host Connectivity Guard | [`9ad0485`] | 2026-10-29 |
 
 ---
 
