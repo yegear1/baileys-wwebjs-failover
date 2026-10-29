@@ -10,7 +10,26 @@ export interface RedisDeduplicatorOptions {
 }
 
 /**
- * Distributed deduplication filter using Redis SET NX EX.
+ * Atomic Redis Lua script for cross-bucket deduplication:
+ * - Checks all candidate keys across adjacent timestamp buckets.
+ * - If any key exists, aborts and returns 0 (duplicate).
+ * - If none exist, atomically sets all candidate keys with TTL EX and returns 1 (novel).
+ * Eliminates cross-bucket race conditions and cuts Redis round-trips from 4 to 1.
+ */
+export const ATOMIC_DEDUP_LUA_SCRIPT = `
+for _, key in ipairs(KEYS) do
+  if redis.call('EXISTS', key) == 1 then
+    return 0
+  end
+end
+for _, key in ipairs(KEYS) do
+  redis.call('SET', key, '1', 'EX', ARGV[1])
+end
+return 1
+`.trim();
+
+/**
+ * Distributed deduplication filter using atomic Redis Lua scripts with fallback to SET NX EX.
  *
  * INVARIANT: Cross-device companion sockets (Baileys and WWebJS) receive identical
  * messages with slight clock skew (±5s). We generate candidate hashes across adjacent
@@ -49,7 +68,17 @@ export class RedisDeduplicator {
 
     const candidateKeys = candidateHashes.map((h) => `${this.prefix}${h}`);
 
-    // Check if any candidate key already exists in Redis
+    // INVARIANT: Atomic Lua script checks candidate keys across adjacent buckets and claims them
+    // in a single server turn to prevent cross-bucket race conditions and cut network RTT from 4 to 1.
+    if (typeof this.client.eval === "function") {
+      const result = await this.client.eval(ATOMIC_DEDUP_LUA_SCRIPT, {
+        keys: candidateKeys,
+        arguments: [String(this.ttlSeconds)],
+      });
+      return Number(result) === 1;
+    }
+
+    // Fallback if Redis client does not support EVAL (e.g. basic mock)
     if (typeof this.client.mGet === "function") {
       const values = await this.client.mGet(candidateKeys);
       if (values.some((val) => val !== null)) {
@@ -86,9 +115,27 @@ export class RedisDeduplicator {
   }
 
   /**
-   * Releases or invalidates a deduplication lock (useful for tests or DLQ redelivery).
+   * Releases or invalidates deduplication lock(s) (useful for tests or DLQ redelivery).
+   * Accepts either a raw hash string or an InboundMessage to clear all candidate bucket keys.
    */
-  async releaseLock(hash: string): Promise<void> {
-    await this.client.del(`${this.prefix}${hash}`);
+  async releaseLock(hashOrMsg: string | InboundMessage): Promise<void> {
+    if (typeof hashOrMsg === "string") {
+      await this.client.del(`${this.prefix}${hashOrMsg}`);
+      return;
+    }
+
+    const candidateHashes = calculateDedupCandidateHashes(
+      {
+        remoteJid: hashOrMsg.remoteJid,
+        senderJid: hashOrMsg.senderJid,
+        timestamp: hashOrMsg.timestamp,
+        textBody: hashOrMsg.textBody,
+        mediaDigest: hashOrMsg.media?.digest,
+      },
+      this.clockSkewSeconds,
+    );
+
+    const keys = candidateHashes.map((h) => `${this.prefix}${h}`);
+    await this.client.del(keys);
   }
 }

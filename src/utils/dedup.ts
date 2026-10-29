@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 
 export interface DedupHashInput {
@@ -6,6 +7,43 @@ export interface DedupHashInput {
   readonly timestamp: number;
   readonly textBody?: string | null | undefined;
   readonly mediaDigest?: string | null | undefined;
+}
+
+/**
+ * Normalizes raw media hash/digest from either engine to a canonical lowercase hex string.
+ * Supports:
+ * - Uint8Array (32-byte SHA-256 buffer, e.g. Baileys fileSha256)
+ * - 64-character Hex string (e.g. Baileys / already normalized digests)
+ * - 44-character Base64 string (32 bytes Base64-encoded, e.g. WWebJS msg.filehash / msg._data.filehash)
+ */
+export function normalizeMediaDigest(raw?: Uint8Array | string | null): string | undefined {
+  if (!raw) return undefined;
+
+  if (raw instanceof Uint8Array || Buffer.isBuffer(raw)) {
+    return Buffer.from(raw).toString("hex").toLowerCase();
+  }
+
+  const str = raw.trim();
+  if (str.length === 0) return undefined;
+
+  // 64-character hex string
+  if (/^[0-9a-fA-F]{64}$/.test(str)) {
+    return str.toLowerCase();
+  }
+
+  // 44-character base64 string (32 bytes with = padding or unpadded)
+  if (/^[A-Za-z0-9+/]{43}=?$/.test(str) || /^[A-Za-z0-9+/]{44}$/.test(str)) {
+    try {
+      const buf = Buffer.from(str, "base64");
+      if (buf.length === 32) {
+        return buf.toString("hex").toLowerCase();
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return str;
 }
 
 /**

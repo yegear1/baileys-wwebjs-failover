@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import type { AnyMessageContent, proto } from "@whiskeysockets/baileys";
 import type {
   InboundMessage,
@@ -6,7 +5,11 @@ import type {
   MessageType,
   OutboundMessage,
 } from "../contracts/messages.js";
-import { calculateDedupHash, normalizeTimestampToSeconds } from "../utils/dedup.js";
+import {
+  calculateDedupHash,
+  normalizeMediaDigest,
+  normalizeTimestampToSeconds,
+} from "../utils/dedup.js";
 
 /**
  * Extracts numeric timestamp in seconds from Baileys message timestamp.
@@ -32,7 +35,7 @@ interface BasicMediaInfo {
 }
 
 function extractMediaAttachment(media: BasicMediaInfo, defaultMime: string): MediaAttachment {
-  const digest = media.fileSha256 ? Buffer.from(media.fileSha256).toString("hex") : undefined;
+  const digest = normalizeMediaDigest(media.fileSha256);
   const sizeBytes =
     media.fileLength !== undefined && media.fileLength !== null
       ? typeof media.fileLength === "object" && typeof media.fileLength.toNumber === "function"

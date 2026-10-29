@@ -193,9 +193,22 @@ class MockRedisClient implements IRedisClient {
   }
 
   async eval(
-    _script: string,
+    script: string,
     options?: { keys?: string[] | undefined; arguments?: string[] | undefined },
   ): Promise<unknown> {
+    if (script.includes("EXISTS")) {
+      const keys = options?.keys ?? [];
+      for (const key of keys) {
+        if (this.kvStore.has(key)) {
+          return 0;
+        }
+      }
+      for (const key of keys) {
+        this.kvStore.set(key, "1");
+      }
+      return 1;
+    }
+
     const key = options?.keys?.[0];
     const expectedValue = options?.arguments?.[0];
     if (key && expectedValue && this.kvStore.get(key) === expectedValue) {
@@ -285,6 +298,97 @@ describe("RedisDeduplicator", () => {
 
     const skewAcquire = await dedup.acquireLock(slightlyLaterMsg);
     expect(skewAcquire).toBe(false);
+  });
+
+  it("atomically handles concurrent arrivals across boundary buckets via Lua script", async () => {
+    const client = new MockRedisClient();
+    const dedup = new RedisDeduplicator({ client, ttlSeconds: 300, clockSkewSeconds: 5 });
+
+    // Socket A arrives at boundary t = 1700000009 (bucket 170000000)
+    const msgA: InboundMessage = {
+      id: "msg_socket_a",
+      remoteJid: "5511999998888@c.us",
+      senderJid: "5511999998888@c.us",
+      fromMe: false,
+      timestamp: 1700000009,
+      type: "text",
+      textBody: "Concurrent arrival across boundary",
+      dedupHash: calculateDedupHash({
+        remoteJid: "5511999998888@c.us",
+        senderJid: "5511999998888@c.us",
+        timestamp: 1700000009,
+        textBody: "Concurrent arrival across boundary",
+      }),
+    };
+
+    // Socket B arrives at boundary t = 1700000011 (bucket 170000001)
+    const msgB: InboundMessage = {
+      id: "msg_socket_b",
+      remoteJid: "5511999998888@c.us",
+      senderJid: "5511999998888@c.us",
+      fromMe: false,
+      timestamp: 1700000011,
+      type: "text",
+      textBody: "Concurrent arrival across boundary",
+      dedupHash: calculateDedupHash({
+        remoteJid: "5511999998888@c.us",
+        senderJid: "5511999998888@c.us",
+        timestamp: 1700000011,
+        textBody: "Concurrent arrival across boundary",
+      }),
+    };
+
+    // Run concurrently
+    const [resultA, resultB] = await Promise.all([
+      dedup.acquireLock(msgA),
+      dedup.acquireLock(msgB),
+    ]);
+
+    // Exactly one must acquire the lock and the other must be rejected
+    const wins = [resultA, resultB].filter(Boolean);
+    expect(wins.length).toBe(1);
+  });
+
+  it("falls back to multi-step mGet/set when client.eval is undefined", async () => {
+    const rawClient = new MockRedisClient();
+    // Simulate Redis client without eval capability
+    const fallbackClient = {
+      ...rawClient,
+      eval: undefined,
+      get: (k: string) => rawClient.get(k),
+      mGet: (ks: string[]) => rawClient.mGet(ks),
+      set: (k: string, v: string, o?: { NX?: boolean; EX?: number }) => rawClient.set(k, v, o),
+      del: (k: string | string[]) => rawClient.del(k),
+    };
+
+    const dedup = new RedisDeduplicator({
+      client: fallbackClient as unknown as IRedisClient,
+      ttlSeconds: 300,
+      clockSkewSeconds: 5,
+    });
+
+    const msg: InboundMessage = {
+      id: "fallback_msg_1",
+      remoteJid: "5511999998888@c.us",
+      senderJid: "5511999998888@c.us",
+      fromMe: false,
+      timestamp: 1700000000,
+      type: "text",
+      textBody: "Fallback test",
+      dedupHash: calculateDedupHash({
+        remoteJid: "5511999998888@c.us",
+        senderJid: "5511999998888@c.us",
+        timestamp: 1700000000,
+        textBody: "Fallback test",
+      }),
+    };
+
+    expect(await dedup.acquireLock(msg)).toBe(true);
+    expect(await dedup.acquireLock(msg)).toBe(false);
+
+    // Release lock and verify it can be re-acquired
+    await dedup.releaseLock(msg);
+    expect(await dedup.acquireLock(msg)).toBe(true);
   });
 });
 

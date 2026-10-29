@@ -193,9 +193,22 @@ class MockRedisClient implements IRedisClient {
   }
 
   async eval(
-    _script: string,
+    script: string,
     options?: { keys?: string[] | undefined; arguments?: string[] | undefined },
   ): Promise<unknown> {
+    if (script.includes("EXISTS")) {
+      const keys = options?.keys ?? [];
+      for (const k of keys) {
+        if (this.kvStore.has(k)) {
+          return 0;
+        }
+      }
+      for (const k of keys) {
+        this.kvStore.set(k, "1");
+      }
+      return 1;
+    }
+
     const key = options?.keys?.[0];
     const expectedValue = options?.arguments?.[0];
     if (key && expectedValue && this.kvStore.get(key) === expectedValue) {

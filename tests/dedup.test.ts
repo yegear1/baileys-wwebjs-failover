@@ -1,8 +1,12 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { mapBaileysMessageToInbound } from "../src/drivers/baileys-mapper.js";
+import { mapWWebJSMessageToInbound } from "../src/drivers/wwebjs-mapper.js";
 import {
   calculateDedupBucket,
   calculateDedupCandidateHashes,
   calculateDedupHash,
+  normalizeMediaDigest,
   normalizeTimestampToSeconds,
 } from "../src/utils/dedup.js";
 
@@ -99,5 +103,69 @@ describe("Deduplication Engine", () => {
     });
 
     expect(candidates).toContain(hashNextBucket);
+  });
+
+  it("normalizes media digests across Uint8Array, 64-char Hex, and 44-char Base64", () => {
+    const rawPayload = Buffer.from("arbitrary image payload content for hash parity");
+    const rawSha256 = createHash("sha256").update(rawPayload).digest();
+    const hexDigest = rawSha256.toString("hex");
+    const base64Digest = rawSha256.toString("base64");
+
+    // Uint8Array input (Baileys format)
+    expect(normalizeMediaDigest(rawSha256)).toBe(hexDigest.toLowerCase());
+
+    // Hex string input
+    expect(normalizeMediaDigest(hexDigest.toUpperCase())).toBe(hexDigest.toLowerCase());
+
+    // Base64 string input (WWebJS format)
+    expect(normalizeMediaDigest(base64Digest)).toBe(hexDigest.toLowerCase());
+
+    // Null/undefined/empty input
+    expect(normalizeMediaDigest(null)).toBeUndefined();
+    expect(normalizeMediaDigest(undefined)).toBeUndefined();
+    expect(normalizeMediaDigest("   ")).toBeUndefined();
+  });
+
+  it("produces identical dedupHash for media messages mapped from Baileys and WWebJS", () => {
+    const timestampSec = 1700000000;
+    const mediaPayload = Buffer.from("sample shared attachment image");
+    const sha256Buffer = createHash("sha256").update(mediaPayload).digest();
+    const sha256Hex = sha256Buffer.toString("hex");
+    const sha256Base64 = sha256Buffer.toString("base64");
+
+    // Baileys media message (supplies fileSha256 as Uint8Array)
+    const baileysInbound = mapBaileysMessageToInbound({
+      key: {
+        id: "baileys_media_1",
+        remoteJid: "5511999998888@s.whatsapp.net",
+        fromMe: false,
+      },
+      messageTimestamp: timestampSec,
+      message: {
+        imageMessage: {
+          mimetype: "image/jpeg",
+          fileSha256: new Uint8Array(sha256Buffer),
+          caption: "Shared photo",
+        },
+      },
+    });
+
+    // WWebJS media message (supplies filehash as Base64 string)
+    const wwebjsInbound = mapWWebJSMessageToInbound({
+      id: { id: "wwebjs_media_1", _serialized: "false_5511999998888@c.us_wwebjs_media_1" },
+      from: "5511999998888@c.us",
+      fromMe: false,
+      timestamp: timestampSec,
+      type: "image",
+      body: "Shared photo",
+      hasMedia: true,
+      filehash: sha256Base64,
+    });
+
+    expect(baileysInbound).not.toBeNull();
+    expect(wwebjsInbound).not.toBeNull();
+    expect(baileysInbound?.media?.digest).toBe(sha256Hex);
+    expect(wwebjsInbound?.media?.digest).toBe(sha256Hex);
+    expect(baileysInbound?.dedupHash).toBe(wwebjsInbound?.dedupHash);
   });
 });

@@ -5,7 +5,11 @@ import type {
   MessageType,
   OutboundMessage,
 } from "../contracts/messages.js";
-import { calculateDedupHash, normalizeTimestampToSeconds } from "../utils/dedup.js";
+import {
+  calculateDedupHash,
+  normalizeMediaDigest,
+  normalizeTimestampToSeconds,
+} from "../utils/dedup.js";
 
 const { MessageMedia } = pkg;
 
@@ -23,6 +27,11 @@ export interface WWebJSMessageLike {
   readonly type: string;
   readonly hasMedia?: boolean;
   readonly mediaKey?: string;
+  readonly filehash?: string;
+  readonly _data?: {
+    readonly filehash?: string;
+    readonly mediaKey?: string;
+  };
   readonly hasQuotedMsg?: boolean;
   readonly duration?: string;
   readonly location?: {
@@ -146,9 +155,12 @@ export function mapWWebJSMessageToInbound(
             ? "audio/ogg"
             : "application/octet-stream";
 
+    const rawDigest = msg.filehash ?? msg._data?.filehash ?? msg.mediaKey ?? msg._data?.mediaKey;
+    const digest = normalizeMediaDigest(rawDigest);
+
     media = {
       mimeType: defaultMime,
-      digest: msg.mediaKey ?? undefined,
+      digest,
       caption: textBody,
     };
   }

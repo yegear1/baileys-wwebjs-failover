@@ -213,9 +213,29 @@ class InMemoryRedisClient implements ITestRedisClient {
   }
 
   async eval(
-    _script: string,
+    script: string,
     options?: { keys?: string[]; arguments?: string[] },
   ): Promise<unknown> {
+    // 1. Atomic deduplication script (checks all keys; sets all keys if none exist)
+    if (script.includes("EXISTS")) {
+      const keys = options?.keys ?? [];
+      const ttlSec = options?.arguments?.[0] ? Number(options.arguments[0]) : 300;
+
+      for (const k of keys) {
+        const val = await this.get(k);
+        if (val !== null) {
+          return 0;
+        }
+      }
+
+      for (const k of keys) {
+        await this.set(k, "1", { EX: ttlSec });
+      }
+
+      return 1;
+    }
+
+    // 2. Fencing lock release script (DEL key if value == expectedValue)
     const key = options?.keys?.[0];
     const expectedValue = options?.arguments?.[0];
     if (key && expectedValue && (await this.get(key)) === expectedValue) {
