@@ -174,9 +174,17 @@ export class GatewayApplication {
     this.isStopping = true;
     logger.info("Initiating graceful shutdown of baileys-wwebjs-failover gateway");
 
-    // Orderly teardown: HTTP -> Maintenance -> Queues -> Orchestrator/Drivers
+    // Orderly teardown: HTTP -> Maintenance -> Buffer Drain -> Queues -> Orchestrator/Drivers
     await this.safeStep(() => this.httpServer.stop(), "GatewayHttpServer");
     this.safeSyncStep(() => this.maintenanceDaemon.stop(), "StandbyMaintenanceDaemon");
+
+    // INVARIANT: Drain/reject pending orchestrator buffer items before stopping queue manager
+    // to prevent worker deadlock when a message is awaiting buffer resolution during shutdown.
+    this.safeSyncStep(
+      () => this.orchestrator.drainOutboundBuffer("Gateway is shutting down"),
+      "FailoverOrchestrator.drainOutboundBuffer",
+    );
+
     await this.safeStep(() => this.queueManager.stop(), "RedisQueueManager");
     await this.safeStep(() => this.orchestrator.shutdown(), "FailoverOrchestrator");
 

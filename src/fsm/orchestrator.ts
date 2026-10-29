@@ -134,6 +134,9 @@ export class FailoverOrchestrator {
    * Starts the orchestrator, initializing primary driver and securing primary fencing lock.
    */
   async start(): Promise<void> {
+    if (this.isShuttingDown || this.state === "SHUTDOWN") {
+      throw new Error("Cannot start: FailoverOrchestrator is shutting down");
+    }
     logger.info("Starting FailoverOrchestrator in PRIMARY_ACTIVE state");
     await this.fencingLock.acquire("baileys");
     this.activeEngine = "baileys";
@@ -143,9 +146,26 @@ export class FailoverOrchestrator {
   }
 
   /**
+   * Immediately rejects and drains all pending items in the outbound buffer.
+   * Prevents deadlocks during worker and orchestrator shutdown.
+   */
+  drainOutboundBuffer(reason = "FailoverOrchestrator buffer cancelled"): number {
+    const count = this.outboundBuffer.length;
+    while (this.outboundBuffer.length > 0) {
+      const item = this.outboundBuffer.shift();
+      item?.reject(new Error(reason));
+    }
+    return count;
+  }
+
+  /**
    * Sends an outbound message. Routes directly to active engine or buffers if transitioning.
    */
   async sendMessage(to: string, content: OutboundMessage): Promise<MessageReceipt> {
+    if (this.isShuttingDown || this.state === "SHUTDOWN") {
+      throw new Error("Cannot send message: FailoverOrchestrator is shutting down");
+    }
+
     if (this.isBufferingState()) {
       return new Promise<MessageReceipt>((resolve, reject) => {
         this.outboundBuffer.push({ to, content, resolve, reject });
@@ -176,7 +196,7 @@ export class FailoverOrchestrator {
    * Triggers automated or manual failover from primary to standby.
    */
   async triggerFailover(reason = "Failover triggered"): Promise<void> {
-    if (this.isTransitioning) return;
+    if (this.isTransitioning || this.isShuttingDown || this.state === "SHUTDOWN") return;
 
     if (this.enableHostConnectivityGuard) {
       try {
@@ -239,7 +259,9 @@ export class FailoverOrchestrator {
    * Manual or probe-triggered failback to primary engine via RECOVERY_SWAP.
    */
   async triggerFailback(reason = "Failback triggered"): Promise<void> {
-    if (this.state !== "FALLBACK_ACTIVE" || this.isTransitioning) return;
+    if (this.state !== "FALLBACK_ACTIVE" || this.isTransitioning || this.isShuttingDown) {
+      return;
+    }
     this.isTransitioning = true;
     this.stopSilentProbeLoop();
 
@@ -404,15 +426,17 @@ export class FailoverOrchestrator {
    * Shuts down the orchestrator, cancelling timers, rejecting buffer, and disconnecting drivers.
    */
   async shutdown(): Promise<void> {
+    if (this.isShuttingDown || this.state === "SHUTDOWN") {
+      return;
+    }
     logger.info("Shutting down FailoverOrchestrator");
     this.isShuttingDown = true;
     this.stopSilentProbeLoop();
 
-    // Reject remaining buffered messages
-    while (this.outboundBuffer.length > 0) {
-      const item = this.outboundBuffer.shift();
-      item?.reject(new Error("FailoverOrchestrator is shutting down"));
-    }
+    // INVARIANT: Drain/reject buffer immediately so in-flight callers do not hang
+    this.drainOutboundBuffer("FailoverOrchestrator is shutting down");
+
+    await this.transitionTo("SHUTDOWN", "SHUTDOWN", "FailoverOrchestrator shutdown initiated");
 
     await Promise.allSettled([
       this.primary.disconnect(),
@@ -522,6 +546,11 @@ export class FailoverOrchestrator {
   }
 
   private async flushOutboundBuffer(): Promise<void> {
+    if (this.isShuttingDown || this.state === "SHUTDOWN") {
+      this.drainOutboundBuffer("FailoverOrchestrator is shutting down");
+      return;
+    }
+
     const driver = this.getCurrentActiveDriver();
     if (!driver) return;
 

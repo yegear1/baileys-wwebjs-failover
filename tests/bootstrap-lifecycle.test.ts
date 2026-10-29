@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayApplication, loadGatewayConfig } from "../src/bootstrap/index.js";
 import type { EngineName, EngineStatus, IWhatsAppDriver } from "../src/contracts/driver.js";
 import type { InboundMessage, MessageReceipt, OutboundMessage } from "../src/contracts/messages.js";
@@ -462,5 +462,68 @@ describe("GatewayApplication Lifecycle Integration", () => {
 
     // Cleanup listeners
     app.removeSignalHandlers();
+  });
+
+  it("drains in-flight buffered messages during shutdown preventing worker deadlock", async () => {
+    const primaryDriver = new MockWhatsAppDriver("baileys");
+    const standbyDriver = new MockWhatsAppDriver("wwebjs");
+    const redisClient = new MockRedisClient();
+
+    // Make standby connect hang so orchestrator stays in COLD_START_STANDBY
+    let resolveStandbyConnect: (() => void) | undefined;
+    const standbyConnectPromise = new Promise<void>((resolve) => {
+      resolveStandbyConnect = resolve;
+    });
+    vi.spyOn(standbyDriver, "connect").mockImplementation(async () => {
+      await standbyConnectPromise;
+    });
+
+    const config = loadGatewayConfig({
+      PORT: "0",
+      HOST: "127.0.0.1",
+      AUTH_DIR_BAILEYS: authDirBaileys,
+      AUTH_DIR_WWEBJS: authDirWWebJS,
+      INBOX_QUEUE_KEY: "test:inbox",
+      OUTBOUND_QUEUE_KEY: "test:outbound",
+      BLPOP_TIMEOUT_SECONDS: "0.05",
+    });
+
+    const app = new GatewayApplication({
+      config,
+      primaryDriver,
+      standbyDriver,
+      redisClient,
+      disableBackgroundProbeTimer: true,
+    });
+
+    await app.start();
+
+    // Trigger failover transition so orchestrator is in COLD_START_STANDBY
+    void app.getOrchestrator().triggerFailover("Simulated failover transition");
+
+    await vi.waitFor(() => {
+      expect(app.getOrchestrator().getState()).toBe("COLD_START_STANDBY");
+    });
+
+    // Send a message directly into orchestrator buffer
+    const bufferedSendPromise = app.getOrchestrator().sendMessage("5511999998888@c.us", {
+      to: "5511999998888@c.us",
+      type: "text",
+      text: "Buffered item in orchestrator",
+    });
+
+    expect(app.getOrchestrator().getSnapshot().bufferedMessagesCount).toBe(1);
+
+    // Calling stop() drains buffer and stops cleanly without deadlocking
+    const stopPromise = app.stop();
+    await expect(stopPromise).resolves.toBeUndefined();
+    expect(app.isRunning()).toBe(false);
+
+    // The buffered send promise rejected with shutdown cancellation error
+    await expect(bufferedSendPromise).rejects.toThrow("Gateway is shutting down");
+    expect(app.getOrchestrator().getSnapshot().bufferedMessagesCount).toBe(0);
+
+    // Cleanup hanging standby
+    resolveStandbyConnect?.();
   });
 });

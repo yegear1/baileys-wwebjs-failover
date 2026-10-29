@@ -315,6 +315,34 @@ export class RedisOutboundWorker {
     this.lastError = errorMessage;
 
     const currentRetries = request.retryCount ?? 0;
+
+    // INVARIANT: Do not penalize retry count or route to DLQ on graceful shutdown cancellation;
+    // preserve payload in priority queue so next gateway startup resumes processing safely.
+    const isShutdownError =
+      !this.isRunning ||
+      errorMessage.includes("shutting down") ||
+      errorMessage.includes("buffer cancelled");
+
+    if (isShutdownError) {
+      const requeuePayload = {
+        ...(typeof rawJson === "object" && rawJson !== null ? rawJson : {}),
+        retryCount: currentRetries,
+        lastError: errorMessage,
+        requeuedAt: new Date().toISOString(),
+      };
+      try {
+        await this.client.lPush(this.outboundQueueKey, JSON.stringify(requeuePayload));
+        this.requeuedCount += 1;
+        logger.info(
+          { id: request.id, to: request.to },
+          "Preserved in-flight message to outbound queue due to shutdown cancellation",
+        );
+      } catch (err) {
+        logger.error({ err }, "Failed re-queueing outbound message to Redis on shutdown");
+      }
+      return;
+    }
+
     const nextRetries = currentRetries + 1;
 
     if (nextRetries < this.maxSendRetries) {

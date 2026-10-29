@@ -665,6 +665,72 @@ describe("RedisOutboundWorker & Failover Backpressure", () => {
     await worker.stop();
     await orchestrator.shutdown();
   });
+
+  it("re-queues in-flight outbound message without exhausting retries or DLQ on shutdown cancellation", async () => {
+    const primaryDriver = new MockWhatsAppDriver("baileys");
+    const standbyDriver = new MockWhatsAppDriver("wwebjs");
+
+    // Make primary driver sendMessage simulate an in-flight send that aborts on shutdown
+    let rejectSend: ((err: Error) => void) | undefined;
+    primaryDriver.sendMessage = vi.fn().mockImplementation(() => {
+      return new Promise<MessageReceipt>((_resolve, reject) => {
+        rejectSend = reject;
+      });
+    });
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver,
+      standbyDriver,
+      disableBackgroundProbeTimer: true,
+    });
+    await orchestrator.start();
+
+    const client = new MockRedisClient();
+    const worker = new RedisOutboundWorker({
+      client,
+      orchestrator,
+      outboundQueueKey: "whatsapp:send:priority",
+      dlqQueueKey: "whatsapp:send:dlq",
+      maxSendRetries: 3,
+      blpopTimeoutSeconds: 0.05,
+    });
+
+    worker.start();
+
+    // Push message to queue
+    await client.lPush(
+      "whatsapp:send:priority",
+      JSON.stringify({
+        to: "5511999998888@c.us",
+        type: "text",
+        text: "In-flight during shutdown",
+        retryCount: 1,
+      }),
+    );
+
+    // Wait for worker to pop and start dispatching
+    await vi.waitFor(() => {
+      expect(primaryDriver.sendMessage).toHaveBeenCalled();
+    });
+
+    // Shutdown occurs while send is in-flight: abort send with shutdown error
+    rejectSend?.(new Error("FailoverOrchestrator is shutting down"));
+
+    // Worker stops cleanly without hanging
+    await worker.stop();
+    await orchestrator.shutdown();
+
+    // DLQ must be empty (shutdown must NOT count as a failed retry to DLQ)
+    const dlqList = client.listStore.get("whatsapp:send:dlq") ?? [];
+    expect(dlqList).toHaveLength(0);
+
+    // Message must be safely preserved in priority queue with original retryCount 1
+    const requeuedList = client.listStore.get("whatsapp:send:priority") ?? [];
+    expect(requeuedList).toHaveLength(1);
+    const requeuedItem = JSON.parse(String(requeuedList[0]));
+    expect(requeuedItem.retryCount).toBe(1);
+    expect(requeuedItem.lastError).toContain("FailoverOrchestrator is shutting down");
+  });
 });
 
 describe("RedisQueueManager", () => {

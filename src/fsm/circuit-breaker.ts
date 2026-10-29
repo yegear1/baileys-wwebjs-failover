@@ -41,8 +41,8 @@ export class CircuitBreaker {
     return this.state;
   }
 
-  getConsecutiveFailures(): number {
-    this.pruneExpiredFailures();
+  getConsecutiveFailures(now: number = Date.now()): number {
+    this.pruneExpiredFailures(now);
     return this.consecutiveFailures;
   }
 
@@ -82,12 +82,11 @@ export class CircuitBreaker {
    * Records a failure in the sliding window.
    * Returns true if this failure caused the circuit to trip to OPEN.
    */
-  recordFailure(error?: unknown): boolean {
-    const now = Date.now();
+  recordFailure(error?: unknown, timestamp?: number): boolean {
+    const now = timestamp ?? Date.now();
     this.lastError = error instanceof Error ? error.message : String(error ?? "Unknown error");
     this.failureTimestamps.push(now);
     this.pruneExpiredFailures(now);
-    this.consecutiveFailures += 1;
 
     if (this.state === "HALF_OPEN") {
       // INVARIANT: Any probe failure immediately aborts probe recovery and returns to OPEN
@@ -137,12 +136,8 @@ export class CircuitBreaker {
 
   private pruneExpiredFailures(now: number = Date.now()): void {
     const cutoff = now - this.windowMs;
-    const initialCount = this.failureTimestamps.length;
     this.failureTimestamps = this.failureTimestamps.filter((t) => t >= cutoff);
-
-    // If all failures expired, reset consecutive failure count
-    if (this.failureTimestamps.length === 0 && initialCount > 0) {
-      this.consecutiveFailures = 0;
-    }
+    // INVARIANT: consecutiveFailures strictly tracks unexpired failures within the sliding window
+    this.consecutiveFailures = this.failureTimestamps.length;
   }
 }

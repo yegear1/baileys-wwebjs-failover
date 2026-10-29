@@ -27,6 +27,7 @@ The Failover Orchestrator operates as a strict finite state machine (FSM):
 | `FALLBACK_ACTIVE` | Silent Probe (Isolated Socket) | Running / Connected | Bound to WWebJS | Outbound restored; Baileys probing |
 | `MAINTENANCE_KEEPALIVE` | Running / Connected | Temporary Wakeup (~2 min) | Bound to Baileys | Periodic anti-expiration keep-alive |
 | `RECOVERY_SWAP` | Restoring Active Listeners | Draining & Destroying Chromium | Bound to Baileys | Failback complete; RAM released |
+| `SHUTDOWN` | Disconnected / Disposed | Disconnected / Destroyed | Drained / Re-queued | Terminal lifecycle state |
 
 ---
 
@@ -67,6 +68,8 @@ $$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textB
 * Baileys send operations race against a deterministic 15s timeout (`SEND_MESSAGE_TIMEOUT_MS`).
 * Transient outbound dispatch failures are re-queued up to `MAX_SEND_RETRIES` (default: 3) before routing to `DLQ_QUEUE_KEY`.
 * Host network WAN connectivity probe validates internet reachability prior to WWebJS standby activation, preventing false failover during host internet outages.
+* Shutdown lifecycle ordering drains and cancels in-flight orchestrator buffer items before worker shutdown, safely re-queueing to Redis without retry penalty or DLQ escalation to prevent deadlocks on exit.
+* Circuit breaker consecutive failure counter strictly tracks unexpired errors within the sliding window, guaranteeing consistent decay under sustained errors, intermittent bursts, or idle periods.
 
 ---
 

@@ -461,7 +461,60 @@ describe("FailoverOrchestrator", () => {
     });
 
     await orchestrator.shutdown();
+    expect(orchestrator.getState()).toBe("SHUTDOWN");
     await expect(sendPromise).rejects.toThrow("FailoverOrchestrator is shutting down");
+
+    // Any send attempt after shutdown immediately rejects
+    await expect(
+      orchestrator.sendMessage("5511999999999@s.whatsapp.net", {
+        to: "5511999999999@s.whatsapp.net",
+        type: "text",
+        text: "Post-shutdown send",
+      }),
+    ).rejects.toThrow("FailoverOrchestrator is shutting down");
+  });
+
+  it("drains outbound buffer with custom reason on demand", async () => {
+    const primary = new MockWhatsAppDriver("baileys");
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+
+    // Keep standby connect hanging
+    vi.spyOn(standby, "connect").mockImplementation(() => new Promise(() => {}));
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver: primary,
+      standbyDriver: standby,
+      disableBackgroundProbeTimer: true,
+    });
+
+    await orchestrator.start();
+    void orchestrator.triggerFailover("Hanging standby");
+
+    await vi.waitFor(() => {
+      expect(orchestrator.getState()).toBe("COLD_START_STANDBY");
+    });
+
+    const sendPromise1 = orchestrator.sendMessage("5511111111111@s.whatsapp.net", {
+      to: "5511111111111@s.whatsapp.net",
+      type: "text",
+      text: "Item 1",
+    });
+    const sendPromise2 = orchestrator.sendMessage("5511222222222@s.whatsapp.net", {
+      to: "5511222222222@s.whatsapp.net",
+      type: "text",
+      text: "Item 2",
+    });
+
+    expect(orchestrator.getSnapshot().bufferedMessagesCount).toBe(2);
+
+    const drainedCount = orchestrator.drainOutboundBuffer("Gateway shutting down preemptively");
+    expect(drainedCount).toBe(2);
+    expect(orchestrator.getSnapshot().bufferedMessagesCount).toBe(0);
+
+    await expect(sendPromise1).rejects.toThrow("Gateway shutting down preemptively");
+    await expect(sendPromise2).rejects.toThrow("Gateway shutting down preemptively");
+
+    await orchestrator.shutdown();
   });
 
   it("suppresses failover to WWebJS standby when host connectivity probe reports offline", async () => {

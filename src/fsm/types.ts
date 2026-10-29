@@ -17,7 +17,8 @@ export type FailoverState =
   | "COLD_START_STANDBY"
   | "FALLBACK_ACTIVE"
   | "MAINTENANCE_KEEPALIVE"
-  | "RECOVERY_SWAP";
+  | "RECOVERY_SWAP"
+  | "SHUTDOWN";
 
 /**
  * Discrete events triggering transitions in the Failover FSM.
@@ -33,7 +34,8 @@ export type FailoverEvent =
   | "ENTER_MAINTENANCE"
   | "EXIT_MAINTENANCE"
   | "MANUAL_FAILOVER"
-  | "MANUAL_FAILBACK";
+  | "MANUAL_FAILBACK"
+  | "SHUTDOWN";
 
 /**
  * Snapshot of orchestrator state for observability and health endpoints.
