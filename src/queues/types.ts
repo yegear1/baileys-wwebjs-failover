@@ -32,6 +32,10 @@ export interface IRedisClient {
   del(key: string | string[]): Promise<number>;
   lPush(key: string, elements: string | string[]): Promise<number>;
   rPush?(key: string, elements: string | string[]): Promise<number>;
+  rPop?(key: string): Promise<string | null>;
+  lLen?(key: string): Promise<number>;
+  ttl?(key: string): Promise<number>;
+  keys?(pattern: string): Promise<string[]>;
   blPop(
     keys: string | string[],
     timeoutSeconds: number,

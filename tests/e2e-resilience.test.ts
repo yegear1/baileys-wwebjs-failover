@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createClient } from "redis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayApplication, loadGatewayConfig } from "../src/bootstrap/index.js";
 import type { EngineName, EngineStatus, IWhatsAppDriver } from "../src/contracts/driver.js";
@@ -149,17 +148,20 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
       FENCING_LOCK_KEY: fencingKey,
     });
 
+    const redisClient = await redisEnv.createClient();
+    const blockingRedisClient = await redisEnv.createClient();
     const app = new GatewayApplication({
       config,
       primaryDriver,
       standbyDriver,
+      redisClient,
+      blockingRedisClient,
       disableBackgroundProbeTimer: true,
     });
 
     await app.start();
 
-    const directClient = createClient({ url: redisEnv.url });
-    await directClient.connect();
+    const directClient = await redisEnv.createClient();
 
     try {
       const orchestrator = app.getOrchestrator();
@@ -264,7 +266,7 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
       expect(primaryDriver.sentMessages.length).toBe(2);
       expect(primaryDriver.sentMessages[1]?.content.text).toBe("Message after recovery swap");
     } finally {
-      await directClient.quit();
+      await directClient.quit?.();
       await app.stop();
     }
   });
@@ -295,17 +297,20 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
       ENABLE_HOST_CONNECTIVITY_GUARD: "false",
     });
 
+    const redisClient = await redisEnv.createClient();
+    const blockingRedisClient = await redisEnv.createClient();
     const app = new GatewayApplication({
       config,
       primaryDriver,
       standbyDriver,
+      redisClient,
+      blockingRedisClient,
       disableBackgroundProbeTimer: true,
     });
 
     await app.start();
 
-    const directClient = createClient({ url: redisEnv.url });
-    await directClient.connect();
+    const directClient = await redisEnv.createClient();
 
     try {
       const orchestrator = app.getOrchestrator();
@@ -355,7 +360,7 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
       expect(texts).toContain("Buffered 2");
       expect(texts).toContain("Buffered 3");
     } finally {
-      await directClient.quit();
+      await directClient.quit?.();
       await app.stop();
     }
   });
@@ -379,17 +384,20 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
       FENCING_LOCK_KEY: fencingKey,
     });
 
+    const redisClient = await redisEnv.createClient();
+    const blockingRedisClient = await redisEnv.createClient();
     const app = new GatewayApplication({
       config,
       primaryDriver,
       standbyDriver,
+      redisClient,
+      blockingRedisClient,
       disableBackgroundProbeTimer: true,
     });
 
     await app.start();
 
-    const directClient = createClient({ url: redisEnv.url });
-    await directClient.connect();
+    const directClient = await redisEnv.createClient();
 
     try {
       const queueManager = app.getQueueManager();
@@ -441,7 +449,7 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
         expect(parsed.textBody).toBe("Real Redis deduplication test message");
       }
     } finally {
-      await directClient.quit();
+      await directClient.quit?.();
       await app.stop();
     }
   });
@@ -471,17 +479,20 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
       FAILOVER_ERROR_THRESHOLD: "10",
     });
 
+    const redisClient = await redisEnv.createClient();
+    const blockingRedisClient = await redisEnv.createClient();
     const app = new GatewayApplication({
       config,
       primaryDriver,
       standbyDriver,
+      redisClient,
+      blockingRedisClient,
       disableBackgroundProbeTimer: true,
     });
 
     await app.start();
 
-    const directClient = createClient({ url: redisEnv.url });
-    await directClient.connect();
+    const directClient = await redisEnv.createClient();
 
     try {
       await directClient.lPush(
@@ -512,7 +523,7 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
         expect(parsed.to).toBe("5511999998888@c.us");
       }
     } finally {
-      await directClient.quit();
+      await directClient.quit?.();
       await app.stop();
     }
   });

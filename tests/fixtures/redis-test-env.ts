@@ -4,10 +4,17 @@ import net from "node:net";
 import { createClient } from "redis";
 import type { IRedisClient } from "../../src/queues/types.js";
 
+export interface ITestRedisClient extends IRedisClient {
+  rPop(key: string): Promise<string | null>;
+  lLen(key: string): Promise<number>;
+  ttl(key: string): Promise<number>;
+  keys(pattern: string): Promise<string[]>;
+}
+
 export interface RedisTestEnvironment {
   readonly url: string;
   readonly isLiveRedis: boolean;
-  createClient(): Promise<IRedisClient>;
+  createClient(): Promise<ITestRedisClient>;
   cleanupKeys(pattern: string): Promise<void>;
   stop(): Promise<void>;
 }
@@ -56,18 +63,29 @@ async function isRedisResponding(url: string, timeoutMs = 1500): Promise<boolean
  * In-memory fallback client conforming to IRedisClient if neither external Redis
  * nor Docker is available in the test environment.
  */
-class InMemoryRedisClient implements IRedisClient {
+class InMemoryRedisClient implements ITestRedisClient {
   public isOpen = true;
-  private readonly store = new Map<string, string>();
-  private readonly lists = new Map<string, string[]>();
+  private readonly store: Map<string, string>;
+  private readonly lists: Map<string, string[]>;
+  private readonly expirations: Map<string, number>;
   private readonly waiters: Array<{
     key: string;
     resolve: (res: { key: string; element: string } | null) => void;
-  }> = [];
+  }>;
 
-  constructor(sharedStore?: Map<string, string>, sharedLists?: Map<string, string[]>) {
-    if (sharedStore) this.store = sharedStore;
-    if (sharedLists) this.lists = sharedLists;
+  constructor(
+    sharedStore?: Map<string, string>,
+    sharedLists?: Map<string, string[]>,
+    sharedExpirations?: Map<string, number>,
+    sharedWaiters?: Array<{
+      key: string;
+      resolve: (res: { key: string; element: string } | null) => void;
+    }>,
+  ) {
+    this.store = sharedStore ?? new Map<string, string>();
+    this.lists = sharedLists ?? new Map<string, string[]>();
+    this.expirations = sharedExpirations ?? new Map<string, number>();
+    this.waiters = sharedWaiters ?? [];
   }
 
   async connect(): Promise<void> {
@@ -82,12 +100,22 @@ class InMemoryRedisClient implements IRedisClient {
     this.waiters.length = 0;
   }
 
+  async quit(): Promise<void> {
+    await this.disconnect();
+  }
+
   async get(key: string): Promise<string | null> {
+    const exp = this.expirations.get(key);
+    if (exp !== undefined && Date.now() > exp) {
+      this.store.delete(key);
+      this.expirations.delete(key);
+      return null;
+    }
     return this.store.get(key) ?? null;
   }
 
   async mGet(keys: string[]): Promise<(string | null)[]> {
-    return keys.map((k) => this.store.get(k) ?? null);
+    return Promise.all(keys.map((k) => this.get(k)));
   }
 
   async set(
@@ -95,10 +123,16 @@ class InMemoryRedisClient implements IRedisClient {
     value: string,
     options?: { NX?: boolean; EX?: number },
   ): Promise<string | null> {
-    if (options?.NX && this.store.has(key)) {
+    const existing = await this.get(key);
+    if (options?.NX && existing !== null) {
       return null;
     }
     this.store.set(key, value);
+    if (options?.EX !== undefined) {
+      this.expirations.set(key, Date.now() + options.EX * 1000);
+    } else {
+      this.expirations.delete(key);
+    }
     return "OK";
   }
 
@@ -107,6 +141,7 @@ class InMemoryRedisClient implements IRedisClient {
     let deleted = 0;
     for (const k of keys) {
       if (this.store.delete(k)) deleted++;
+      this.expirations.delete(k);
       if (this.lists.delete(k)) deleted++;
     }
     return deleted;
@@ -115,19 +150,80 @@ class InMemoryRedisClient implements IRedisClient {
   async lPush(key: string, elements: string | string[]): Promise<number> {
     const list = this.lists.get(key) ?? [];
     const items = Array.isArray(elements) ? elements : [elements];
-    list.unshift(...items);
-    this.lists.set(key, list);
 
-    const waiterIdx = this.waiters.findIndex((w) => w.key === key);
-    if (waiterIdx !== -1) {
-      const waiter = this.waiters.splice(waiterIdx, 1)[0];
-      const popped = list.pop();
-      if (waiter && popped !== undefined) {
-        waiter.resolve({ key, element: popped });
+    for (const item of items) {
+      const waiterIdx = this.waiters.findIndex((w) => w.key === key);
+      if (waiterIdx >= 0) {
+        const waiter = this.waiters.splice(waiterIdx, 1)[0];
+        if (waiter) {
+          waiter.resolve({ key, element: item });
+          continue;
+        }
+      }
+      list.unshift(item);
+    }
+    this.lists.set(key, list);
+    return list.length;
+  }
+
+  async rPop(key: string): Promise<string | null> {
+    const list = this.lists.get(key);
+    if (!list || list.length === 0) {
+      return null;
+    }
+    return list.pop() ?? null;
+  }
+
+  async lLen(key: string): Promise<number> {
+    const list = this.lists.get(key);
+    return list ? list.length : 0;
+  }
+
+  async ttl(key: string): Promise<number> {
+    const exists = this.store.has(key);
+    if (!exists) {
+      return -2;
+    }
+    const exp = this.expirations.get(key);
+    if (exp === undefined) {
+      return -1;
+    }
+    const remainingMs = exp - Date.now();
+    if (remainingMs <= 0) {
+      this.store.delete(key);
+      this.expirations.delete(key);
+      return -2;
+    }
+    return Math.ceil(remainingMs / 1000);
+  }
+
+  async keys(pattern: string): Promise<string[]> {
+    const regex = new RegExp(`^${pattern.replace(/\*/g, ".*")}$`);
+    const results = new Set<string>();
+    for (const k of this.store.keys()) {
+      if (regex.test(k)) {
+        const val = await this.get(k);
+        if (val !== null) results.add(k);
       }
     }
+    for (const k of this.lists.keys()) {
+      if (regex.test(k)) results.add(k);
+    }
+    return Array.from(results);
+  }
 
-    return list.length;
+  async eval(
+    _script: string,
+    options?: { keys?: string[]; arguments?: string[] },
+  ): Promise<unknown> {
+    const key = options?.keys?.[0];
+    const expectedValue = options?.arguments?.[0];
+    if (key && expectedValue && (await this.get(key)) === expectedValue) {
+      this.store.delete(key);
+      this.expirations.delete(key);
+      return 1;
+    }
+    return 0;
   }
 
   async blPop(
@@ -153,27 +249,31 @@ class InMemoryRedisClient implements IRedisClient {
       return null;
     }
 
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        const idx = this.waiters.findIndex((w) => w.resolve === resolve);
+    return new Promise<{ key: string; element: string } | null>((resolve) => {
+      let timer: NodeJS.Timeout | undefined;
+      const waiter = {
+        key: firstKey,
+        resolve: (val: { key: string; element: string } | null) => {
+          if (timer) clearTimeout(timer);
+          resolve(val);
+        },
+      };
+
+      timer = setTimeout(() => {
+        const idx = this.waiters.indexOf(waiter);
         if (idx !== -1) {
           this.waiters.splice(idx, 1);
         }
         resolve(null);
       }, timeoutSeconds * 1000);
+      timer.unref?.();
 
-      this.waiters.push({
-        key: firstKey,
-        resolve: (val) => {
-          clearTimeout(timer);
-          resolve(val);
-        },
-      });
+      this.waiters.push(waiter);
     });
   }
 
   duplicate(): IRedisClient {
-    return new InMemoryRedisClient(this.store, this.lists);
+    return new InMemoryRedisClient(this.store, this.lists, this.expirations, this.waiters);
   }
 }
 
@@ -220,10 +320,10 @@ export async function setupRedisTestEnvironment(): Promise<RedisTestEnvironment>
       return {
         url: ephemeralUrl,
         isLiveRedis: true,
-        createClient: async (): Promise<IRedisClient> => {
+        createClient: async (): Promise<ITestRedisClient> => {
           const client = createClient({ url: ephemeralUrl });
           await client.connect();
-          return client as unknown as IRedisClient;
+          return client as unknown as ITestRedisClient;
         },
         cleanupKeys: async (pattern: string): Promise<void> => {
           const client = createClient({ url: ephemeralUrl });
@@ -263,17 +363,25 @@ export async function setupRedisTestEnvironment(): Promise<RedisTestEnvironment>
   // Fallback in-memory environment
   const sharedStore = new Map<string, string>();
   const sharedLists = new Map<string, string[]>();
+  const sharedExpirations = new Map<string, number>();
+  const sharedWaiters: Array<{
+    key: string;
+    resolve: (res: { key: string; element: string } | null) => void;
+  }> = [];
 
   return {
     url: "memory://mock-redis",
     isLiveRedis: false,
-    createClient: async (): Promise<IRedisClient> => {
-      return new InMemoryRedisClient(sharedStore, sharedLists);
+    createClient: async (): Promise<ITestRedisClient> => {
+      return new InMemoryRedisClient(sharedStore, sharedLists, sharedExpirations, sharedWaiters);
     },
     cleanupKeys: async (pattern: string): Promise<void> => {
       const regex = new RegExp(`^${pattern.replace(/\*/g, ".*")}$`);
       for (const k of Array.from(sharedStore.keys())) {
         if (regex.test(k)) sharedStore.delete(k);
+      }
+      for (const k of Array.from(sharedExpirations.keys())) {
+        if (regex.test(k)) sharedExpirations.delete(k);
       }
       for (const k of Array.from(sharedLists.keys())) {
         if (regex.test(k)) sharedLists.delete(k);
@@ -282,6 +390,8 @@ export async function setupRedisTestEnvironment(): Promise<RedisTestEnvironment>
     stop: async (): Promise<void> => {
       sharedStore.clear();
       sharedLists.clear();
+      sharedExpirations.clear();
+      sharedWaiters.length = 0;
     },
   };
 }
@@ -290,10 +400,10 @@ function createLiveEnvironment(url: string): RedisTestEnvironment {
   return {
     url,
     isLiveRedis: true,
-    createClient: async (): Promise<IRedisClient> => {
+    createClient: async (): Promise<ITestRedisClient> => {
       const client = createClient({ url });
       await client.connect();
-      return client as unknown as IRedisClient;
+      return client as unknown as ITestRedisClient;
     },
     cleanupKeys: async (pattern: string): Promise<void> => {
       const client = createClient({ url });
