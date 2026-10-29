@@ -7,19 +7,19 @@
 
 ## Active Task
 
-### [90.3] Atomic Lua Deduplication & Media Digest Parity
+### [90.4] Shutdown Lifecycle Ordering & Buffer Safety
 
 **Status:** PLANNING
-**Objective:** Replace multi-RTT deduplication lock check with atomic Redis Lua script to eliminate cross-bucket race conditions, and harmonize media message digest extraction between `baileys-mapper` and `wwebjs-mapper`.
+**Objective:** Ensure `orchestrator.shutdown()` cancels/rejects in-flight buffer before or during worker shutdown to prevent deadlock on exit, and ensure `CircuitBreaker.consecutiveFailures` window decay consistency.
 
 **Plan:**
-1. Atomic Lua Deduplication Script:
-   - Implement EVALSHA/EVAL Redis Lua script in `RedisDeduplicator.acquireLock` checking both timestamp buckets ($t$ and $t-1$) atomically and applying `SET ... EX` in a single server turn.
-   - Cut network RTTs from 4 round trips to 1 atomic command.
-2. Media Digest Parity:
-   - Ensure `baileys-mapper` and `wwebjs-mapper` extract consistent SHA-256 / SHA-1 digests for media payloads (images, documents, voice notes) so deduplication hashes match across engines.
-3. Automated Tests:
-   - Add unit and concurrency integration tests for the atomic Lua script and media digest parity.
+1. Shutdown Lifecycle Ordering & Buffer Drain:
+   - Audit `orchestrator.shutdown()` and `gateway.ts` shutdown sequence.
+   - When the orchestrator enters `SHUTDOWN`, reject or drain pending buffer items with a descriptive cancellation error so callers do not hang indefinitely awaiting transitions that will never happen.
+2. Circuit Breaker Failure Window Decay:
+   - Verify `CircuitBreaker.consecutiveFailures` window decay consistency and reset mechanics under sustained error vs idle periods.
+3. Tests & Verification:
+   - Add unit/lifecycle tests for shutdown buffer drainage without hanging promises and circuit breaker decay consistency.
 
 ---
 
@@ -42,14 +42,14 @@
 | [03.3] | Zero-Loss Outbound Re-queue, Dead-Letter Queue & Host Connectivity Guard | [`9ad0485`] | 2026-10-29 |
 | [90.1] | Hermetic Redis Test Fallback & E2E Resilience Decoupling | [`8485c62`] | 2026-10-29 |
 | [90.2] | Driver Stability & Lifecycle Hardening | [`917937d`] | 2026-10-29 |
+| [90.3] | Atomic Lua Deduplication & Media Digest Parity | [`07f4807`] | 2026-10-29 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- [90.4] Shutdown Lifecycle Ordering & Buffer Safety
-  - Ensure `orchestrator.shutdown()` cancels/rejects in-flight buffer before or during worker shutdown to prevent deadlock on exit.
-  - Fix `CircuitBreaker.consecutiveFailures` window decay consistency.
+- [90.5] Observability & Prometheus Metrics Exporter
+  - Export real-time Prometheus metrics endpoint (`/metrics`) for failover count, engine latencies, buffer depth, and DLQ counters.
 
 ---
 
