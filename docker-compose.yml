@@ -71,6 +71,9 @@ services:
       - noeviction
     volumes:
       - redis_data:/data
+    ports:
+      # INVARIANT: Bind strictly to loopback interface for local dev & test suites
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     deploy:
       resources:
         limits:

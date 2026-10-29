@@ -85,6 +85,7 @@ cp .env.example .env
 | `NODE_ENV` | Modo do ambiente de execução | `development` | Não |
 | `PORT` | Porta HTTP para `/health` e `/qr/*` | `3000` | Não |
 | `REDIS_URL` | URL de conexão com o Redis | `redis://127.0.0.1:6379` | Sim |
+| `REDIS_PORT` | Porta em loopback no host mapeada pelo Compose para o Redis | `6379` | Não |
 | `AUTH_DIR_BAILEYS` | Diretório de armazenamento das credenciais do Baileys | `/data/auth/baileys` | Não |
 | `AUTH_DIR_WWEBJS` | Diretório de armazenamento do perfil do WWebJS | `/data/auth/wwebjs` | Não |
 | `PUPPETEER_EXECUTABLE_PATH` | Caminho do executável do Chromium | `/usr/bin/chromium` | Não |

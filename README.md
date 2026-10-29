@@ -85,6 +85,7 @@ cp .env.example .env
 | `NODE_ENV` | Runtime environment mode | `development` | No |
 | `PORT` | HTTP server port for `/health` and `/qr/*` | `3000` | No |
 | `REDIS_URL` | Redis connection URL | `redis://127.0.0.1:6379` | Yes |
+| `REDIS_PORT` | Host loopback port mapped by Compose to Redis | `6379` | No |
 | `AUTH_DIR_BAILEYS` | Multi-device auth storage path for Baileys | `/data/auth/baileys` | No |
 | `AUTH_DIR_WWEBJS` | Profile auth storage path for WWebJS | `/data/auth/wwebjs` | No |
 | `PUPPETEER_EXECUTABLE_PATH` | Path to Chromium executable | `/usr/bin/chromium` | No |
