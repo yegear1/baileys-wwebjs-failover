@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### 📌 Task [03.1]: End-to-End Gateway Integration & Service Bootstrap
+### 📌 Task [03.2]: E2E Smoke & Resilience Verification
 
-- **Description:** Implement entrypoint bootstrapping HTTP observability server, Redis queue consumer/publisher, failover orchestrator, standby maintenance daemon, and graceful teardown signal handling.
-- **Systems Involved:** `bootstrap`, `orchestrator`, `queues`, `http`, `lifecycle`
+- **Description:** Integration test suite running against real Redis instance verifying full failover cycle under synthetic network fault, message deduplication, and queue backpressure.
+- **Systems Involved:** `e2e`, `resilience`, `orchestrator`, `redis`, `drivers`
 - **Action Type:**
   - [ ] Read-only / Documentation
   - [x] Source code changes
@@ -18,9 +18,9 @@
   *(Workflow: `READY FOR PLANNING` → `PLANNING` on presenting plan → approval → `RUNNING`)*
 
 ### Acceptance Criteria
-- [ ] Bootstrap entrypoint (`src/main.ts` / `src/index.ts`) coordinates lifecycle startup of drivers, queues, HTTP server, and maintenance daemon.
-- [ ] Signal handling (`SIGTERM`, `SIGINT`) gracefully stops queue workers, tears down active and standby drivers, and closes redis connections.
-- [ ] End-to-end integration tests verify clean startup and graceful shutdown sequences.
+- [ ] End-to-end integration test suite executes against live or testcontainer/compose Redis service.
+- [ ] Primary socket failure triggers circuit breaker tripping, fencing lock acquisition, cold-start standby promotion, and failback recovery swap upon primary reconnection.
+- [ ] Message buffer and backpressure prevent data loss during transitional states (`FENCING`, `COLD_START_STANDBY`).
 - [ ] Typecheck, tests, and linter exit code 0.
 
 ---
@@ -39,12 +39,13 @@
 | [01.6] | Redis Queue Integration & Deduplication Lock | [`0ef28c3`] | 2026-10-28 |
 | [02.1] | Dual-Device QR Pairing & Granular Health API | [`632eb2b`] | 2026-10-28 |
 | [02.2] | Container Orchestration & Production Compose Stack | [`18ad2d5`] | 2026-10-28 |
+| [03.1] | End-to-End Gateway Integration & Service Bootstrap | [`63eb7d4`] | 2026-10-28 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- [ ] **[03.2]** **E2E Smoke & Resilience Verification** — Integration test suite running against real Redis instance verifying failover cycle under synthetic network fault.
+*(Active development milestone completed; backlog clear)*
 
 ---
 
