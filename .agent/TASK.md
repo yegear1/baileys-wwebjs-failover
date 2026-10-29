@@ -7,7 +7,19 @@
 
 ## Active Task
 
-*(No active task. Milestone development complete; backlog clear. Ready for human instruction or release preparation [99.1].)*
+### [90.3] Atomic Lua Deduplication & Media Digest Parity
+
+**Status:** PLANNING
+**Objective:** Replace multi-RTT deduplication lock check with atomic Redis Lua script to eliminate cross-bucket race conditions, and harmonize media message digest extraction between `baileys-mapper` and `wwebjs-mapper`.
+
+**Plan:**
+1. Atomic Lua Deduplication Script:
+   - Implement EVALSHA/EVAL Redis Lua script in `RedisDeduplicator.acquireLock` checking both timestamp buckets ($t$ and $t-1$) atomically and applying `SET ... EX` in a single server turn.
+   - Cut network RTTs from 4 round trips to 1 atomic command.
+2. Media Digest Parity:
+   - Ensure `baileys-mapper` and `wwebjs-mapper` extract consistent SHA-256 / SHA-1 digests for media payloads (images, documents, voice notes) so deduplication hashes match across engines.
+3. Automated Tests:
+   - Add unit and concurrency integration tests for the atomic Lua script and media digest parity.
 
 ---
 
@@ -29,12 +41,15 @@
 | [03.2] | E2E Smoke & Resilience Verification | [`7067936`] | 2026-10-29 |
 | [03.3] | Zero-Loss Outbound Re-queue, Dead-Letter Queue & Host Connectivity Guard | [`9ad0485`] | 2026-10-29 |
 | [90.1] | Hermetic Redis Test Fallback & E2E Resilience Decoupling | [`8485c62`] | 2026-10-29 |
+| [90.2] | Driver Stability & Lifecycle Hardening | [`917937d`] | 2026-10-29 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-*(Active development milestone completed; backlog clear)*
+- [90.4] Shutdown Lifecycle Ordering & Buffer Safety
+  - Ensure `orchestrator.shutdown()` cancels/rejects in-flight buffer before or during worker shutdown to prevent deadlock on exit.
+  - Fix `CircuitBreaker.consecutiveFailures` window decay consistency.
 
 ---
 
