@@ -28,6 +28,7 @@ class MockWWebJSClient extends EventEmitter implements WWebJSClientInterface {
 
   public mockPid: number | undefined = 12345;
   public mockKilled = false;
+  public autoEmitReady = true;
 
   public pupBrowser = {
     process: () => ({
@@ -60,6 +61,9 @@ class MockWWebJSClient extends EventEmitter implements WWebJSClientInterface {
 
   public async initialize(): Promise<void> {
     await this.initializeMock();
+    if (this.autoEmitReady) {
+      queueMicrotask(() => this.emit("ready"));
+    }
   }
 
   public async destroy(): Promise<void> {
@@ -76,7 +80,12 @@ class MockWWebJSClient extends EventEmitter implements WWebJSClientInterface {
 }
 
 function createTestDriver(
-  options: { mockClient?: MockWWebJSClient; teardownTimeoutMs?: number } = {},
+  options: {
+    mockClient?: MockWWebJSClient;
+    teardownTimeoutMs?: number;
+    readyTimeoutMs?: number;
+    awaitReady?: boolean;
+  } = {},
 ): {
   driver: WWebJSDriver;
   mockClient: MockWWebJSClient;
@@ -92,6 +101,8 @@ function createTestDriver(
     ...(options.teardownTimeoutMs !== undefined
       ? { teardownTimeoutMs: options.teardownTimeoutMs }
       : {}),
+    ...(options.readyTimeoutMs !== undefined ? { readyTimeoutMs: options.readyTimeoutMs } : {}),
+    ...(options.awaitReady !== undefined ? { awaitReady: options.awaitReady } : {}),
   });
 
   const cleanup = () => {
@@ -322,7 +333,9 @@ describe("WWebJSDriver Lifecycle & Event Wiring", () => {
   });
 
   it("handles QR, ready, authenticated, and battery status transitions", async () => {
-    const { driver, mockClient, cleanup } = createTestDriver();
+    const mockClient = new MockWWebJSClient();
+    mockClient.autoEmitReady = false;
+    const { driver, cleanup } = createTestDriver({ mockClient, awaitReady: false });
 
     try {
       const statusChanges: string[] = [];
@@ -358,7 +371,9 @@ describe("WWebJSDriver Lifecycle & Event Wiring", () => {
   });
 
   it("handles auth_failure and disconnected events", async () => {
-    const { driver, mockClient, cleanup } = createTestDriver();
+    const mockClient = new MockWWebJSClient();
+    mockClient.autoEmitReady = false;
+    const { driver, cleanup } = createTestDriver({ mockClient, awaitReady: false });
 
     try {
       await driver.connect();
@@ -540,6 +555,114 @@ describe("Container Process Hygiene & Teardown", () => {
       expect(puppeteerOpts?.executablePath).toBe("/usr/bin/custom-chromium");
     } finally {
       rmSync(tempParent, { recursive: true, force: true });
+    }
+  });
+
+  it("connect() awaits 'ready' event before resolving to ensure genuine readiness", async () => {
+    const mockClient = new MockWWebJSClient();
+    mockClient.autoEmitReady = false;
+
+    const { driver, cleanup } = createTestDriver({ mockClient, readyTimeoutMs: 200 });
+
+    try {
+      let isReadyBeforeConnectFinished = false;
+      const connectPromise = driver.connect().then(() => {
+        isReadyBeforeConnectFinished = driver.getStatus().connected;
+      });
+
+      // Simulate asynchronous ready event after 20ms
+      setTimeout(() => {
+        mockClient.emit("ready");
+      }, 20);
+
+      await connectPromise;
+
+      expect(isReadyBeforeConnectFinished).toBe(true);
+      expect(driver.getStatus().state).toBe("CONNECTED");
+      expect(driver.getStatus().connected).toBe(true);
+    } finally {
+      await driver.disconnect();
+      cleanup();
+    }
+  });
+
+  it("connect() times out when 'ready' event is not received within readyTimeoutMs", async () => {
+    const mockClient = new MockWWebJSClient();
+    mockClient.autoEmitReady = false; // Never emits ready
+
+    const { driver, cleanup } = createTestDriver({ mockClient, readyTimeoutMs: 50 });
+
+    try {
+      await expect(driver.connect()).rejects.toThrow(
+        "WWebJS connect timed out waiting for 'ready' event after 50ms",
+      );
+      expect(driver.getStatus().state).toBe("ERROR");
+      expect(driver.getStatus().connected).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("connect() rejects immediately when auth_failure is emitted during connect wait", async () => {
+    const mockClient = new MockWWebJSClient();
+    mockClient.autoEmitReady = false;
+
+    const { driver, cleanup } = createTestDriver({ mockClient, readyTimeoutMs: 200 });
+
+    try {
+      const connectPromise = driver.connect();
+      setTimeout(() => {
+        mockClient.emit("auth_failure", "Bad companion token");
+      }, 10);
+
+      await expect(connectPromise).rejects.toThrow(
+        "WWebJS authentication failed: Bad companion token",
+      );
+      expect(driver.getStatus().state).toBe("ERROR");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("supports multiple statusHandlers and messageHandlers without clobbering", async () => {
+    const { driver, mockClient, cleanup } = createTestDriver();
+
+    try {
+      const statusLog1: string[] = [];
+      const statusLog2: string[] = [];
+      driver.onStatusChange((s) => statusLog1.push(s.state));
+      driver.onStatusChange((s) => statusLog2.push(s.state));
+
+      const messages1: string[] = [];
+      const messages2: string[] = [];
+      driver.onMessage(async (msg) => {
+        messages1.push(msg.id);
+      });
+      driver.onMessage(async (msg) => {
+        messages2.push(msg.id);
+      });
+
+      await driver.connect();
+
+      mockClient.emit("message", {
+        id: { id: "msg-multi-listener" },
+        from: "5511999999999@c.us",
+        fromMe: false,
+        timestamp: 1700000100,
+        type: "chat",
+        body: "Multi listener test",
+      });
+
+      expect(statusLog1).toContain("CONNECTED");
+      expect(statusLog2).toContain("CONNECTED");
+
+      await vi.waitFor(() => {
+        expect(messages1).toContain("msg-multi-listener");
+        expect(messages2).toContain("msg-multi-listener");
+      });
+    } finally {
+      await driver.disconnect();
+      cleanup();
     }
   });
 });

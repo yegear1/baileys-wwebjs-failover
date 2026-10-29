@@ -337,7 +337,8 @@ describe("FailoverOrchestrator", () => {
     // 1st successful probe
     expect(await orchestrator.executeSilentProbe()).toBe(true);
 
-    // Fail primary connect during next probe
+    // Primary drops connection and fails to reconnect during next probe
+    await primary.disconnect();
     vi.spyOn(primary, "connect").mockRejectedValueOnce(new Error("Primary still unreachable"));
     expect(await orchestrator.executeSilentProbe()).toBe(false);
     expect(orchestrator.getState()).toBe("FALLBACK_ACTIVE");
@@ -513,6 +514,101 @@ describe("FailoverOrchestrator", () => {
     expect(orchestrator.getState()).toBe("FALLBACK_ACTIVE");
     expect(orchestrator.getActiveEngine()).toBe("wwebjs");
     expect(standby.connectCalls).toBe(1);
+
+    await orchestrator.shutdown();
+  });
+
+  it("inspects existing primary connection state without calling connect() if already connected", async () => {
+    const primary = new MockWhatsAppDriver("baileys");
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver: primary,
+      standbyDriver: standby,
+      disableBackgroundProbeTimer: true,
+      circuitBreakerOptions: { probeSuccessThreshold: 3 },
+    });
+
+    await orchestrator.start();
+    await orchestrator.triggerFailover("Trigger failover for probe test");
+    expect(orchestrator.getState()).toBe("FALLBACK_ACTIVE");
+
+    // Probe 1 connects primary
+    expect(await orchestrator.executeSilentProbe()).toBe(true);
+    const connectCallsAfterProbe1 = primary.connectCalls;
+
+    // Probe 2 inspects existing connected state without calling connect() again
+    expect(await orchestrator.executeSilentProbe()).toBe(true);
+    expect(primary.connectCalls).toBe(connectCallsAfterProbe1);
+
+    await orchestrator.shutdown();
+  });
+
+  it("tears down primary probe socket to prevent leaks when probe fails or times out", async () => {
+    const primary = new MockWhatsAppDriver("baileys");
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver: primary,
+      standbyDriver: standby,
+      disableBackgroundProbeTimer: true,
+      probeTimeoutMs: 50,
+    });
+
+    await orchestrator.start();
+    await orchestrator.triggerFailover("Failover trigger");
+    expect(orchestrator.getState()).toBe("FALLBACK_ACTIVE");
+
+    // Primary hangs or fails to reach CONNECTED status
+    primary.connect = vi.fn().mockImplementation(async () => {
+      // Sets state to CONNECTING but never CONNECTED
+      primary.simulateStatusChange({ engine: "baileys", state: "CONNECTING", connected: false });
+    });
+
+    const disconnectCallsBefore = primary.disconnectCalls;
+    const probeResult = await orchestrator.executeSilentProbe();
+
+    expect(probeResult).toBe(false);
+    // Verifies safe teardown of probe socket
+    expect(primary.disconnectCalls).toBeGreaterThan(disconnectCallsBefore);
+
+    await orchestrator.shutdown();
+  });
+
+  it("monitors standby onStatusChange during FALLBACK_ACTIVE and triggers failback when standby crashes and primary is healthy", async () => {
+    const primary = new MockWhatsAppDriver("baileys");
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver: primary,
+      standbyDriver: standby,
+      disableBackgroundProbeTimer: true,
+      circuitBreakerOptions: { probeSuccessThreshold: 5 }, // Needs 5 to normal failback
+    });
+
+    await orchestrator.start();
+    await orchestrator.triggerFailover("Initial failover");
+    expect(orchestrator.getState()).toBe("FALLBACK_ACTIVE");
+
+    // Probe 1 makes primary connected
+    await orchestrator.executeSilentProbe();
+    expect(primary.getStatus().connected).toBe(true);
+    expect(orchestrator.getState()).toBe("FALLBACK_ACTIVE");
+
+    // Standby crashes unexpectedly during FALLBACK_ACTIVE
+    standby.simulateStatusChange({
+      engine: "wwebjs",
+      state: "ERROR",
+      connected: false,
+      error: "Chromium crashed unexpectedly OOM",
+    });
+
+    // Standby crash triggers immediate recovery swap because primary is already connected
+    await vi.waitFor(() => {
+      expect(orchestrator.getState()).toBe("PRIMARY_ACTIVE");
+    });
+    expect(orchestrator.getActiveEngine()).toBe("baileys");
+    expect(orchestrator.getSnapshot().lastError).toBe("Chromium crashed unexpectedly OOM");
 
     await orchestrator.shutdown();
   });

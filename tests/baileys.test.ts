@@ -474,4 +474,158 @@ describe("BaileysDriver", () => {
       rmSync(tempParent, { recursive: true, force: true });
     }
   });
+
+  it("schedules auto-reconnect on transient network drop and resets attempts upon open", async () => {
+    const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-reconnect-"));
+    const authDir = join(tempParent, "creds");
+    const { sock, ev } = createMockSocket();
+
+    let connectCount = 0;
+    const socketFactoryMock = vi.fn().mockImplementation(() => {
+      connectCount += 1;
+      return sock;
+    });
+
+    const driver = new BaileysDriver({
+      authDir,
+      reconnectInitialDelayMs: 10,
+      reconnectMaxDelayMs: 50,
+      reconnectMaxAttempts: 3,
+      authStateLoader: vi.fn().mockResolvedValue({
+        state: {} as AuthenticationState,
+        saveCreds: vi.fn(),
+      }),
+      socketFactory: socketFactoryMock as unknown as (config: UserFacingSocketConfig) => WASocket,
+    });
+
+    try {
+      await driver.connect();
+      expect(connectCount).toBe(1);
+      ev.emit("connection.update", { connection: "open" });
+      expect(driver.getStatus().state).toBe("CONNECTED");
+
+      // Transient disconnect with DisconnectReason.connectionLost (408)
+      const transientErr = Object.assign(new Error("Connection lost"), {
+        output: { statusCode: 408 },
+      });
+      ev.emit("connection.update", {
+        connection: "close",
+        lastDisconnect: { error: transientErr },
+      });
+
+      expect(driver.getStatus().state).toBe("DISCONNECTED");
+
+      // Await automatic reconnect
+      await vi.waitFor(() => {
+        expect(connectCount).toBe(2);
+      });
+
+      // Confirm state resets on reconnect open
+      ev.emit("connection.update", { connection: "open" });
+      expect(driver.getStatus().state).toBe("CONNECTED");
+    } finally {
+      await driver.disconnect();
+      rmSync(tempParent, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels pending reconnect timer upon explicit disconnect()", async () => {
+    const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-cancel-reconnect-"));
+    const authDir = join(tempParent, "creds");
+    const { sock, ev } = createMockSocket();
+
+    let connectCount = 0;
+    const driver = new BaileysDriver({
+      authDir,
+      reconnectInitialDelayMs: 50,
+      reconnectMaxAttempts: 3,
+      authStateLoader: vi.fn().mockResolvedValue({
+        state: {} as AuthenticationState,
+        saveCreds: vi.fn(),
+      }),
+      socketFactory: vi.fn().mockImplementation(() => {
+        connectCount += 1;
+        return sock;
+      }) as unknown as (config: UserFacingSocketConfig) => WASocket,
+    });
+
+    try {
+      await driver.connect();
+      expect(connectCount).toBe(1);
+      ev.emit("connection.update", { connection: "open" });
+
+      // Trigger transient drop
+      const dropErr = Object.assign(new Error("Restart required"), {
+        output: { statusCode: 515 },
+      });
+      ev.emit("connection.update", {
+        connection: "close",
+        lastDisconnect: { error: dropErr },
+      });
+
+      // Immediately execute explicit disconnect
+      await driver.disconnect();
+      expect(driver.getStatus().state).toBe("DISCONNECTED");
+
+      // Wait longer than initial delay to ensure no reconnect fired
+      await new Promise((r) => setTimeout(r, 70));
+      expect(connectCount).toBe(1);
+    } finally {
+      rmSync(tempParent, { recursive: true, force: true });
+    }
+  });
+
+  it("transitions to ERROR when auto-reconnect attempts are exhausted", async () => {
+    const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-exhausted-"));
+    const authDir = join(tempParent, "creds");
+    const { sock, ev } = createMockSocket();
+
+    const driver = new BaileysDriver({
+      authDir,
+      reconnectInitialDelayMs: 5,
+      reconnectMaxDelayMs: 10,
+      reconnectMaxAttempts: 2,
+      authStateLoader: vi.fn().mockResolvedValue({
+        state: {} as AuthenticationState,
+        saveCreds: vi.fn(),
+      }),
+      socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+        config: UserFacingSocketConfig,
+      ) => WASocket,
+    });
+
+    try {
+      await driver.connect();
+      ev.emit("connection.update", { connection: "open" });
+
+      const transientErr = Object.assign(new Error("Connection closed"), {
+        output: { statusCode: 428 },
+      });
+
+      // Drop 1 -> schedules attempt 1
+      ev.emit("connection.update", {
+        connection: "close",
+        lastDisconnect: { error: transientErr },
+      });
+
+      // Await auto-reconnect attempt 1
+      await vi.waitFor(() => {
+        expect(driver.getStatus().state).toBe("CONNECTING");
+      });
+
+      // Drop 2 -> attempts exhausted (reconnectMaxAttempts = 2) and transitions to ERROR
+      ev.emit("connection.update", {
+        connection: "close",
+        lastDisconnect: { error: transientErr },
+      });
+
+      await vi.waitFor(() => {
+        expect(driver.getStatus().state).toBe("ERROR");
+        expect(driver.getStatus().error).toContain("Auto-reconnect failed after 2 attempts");
+      });
+    } finally {
+      await driver.disconnect();
+      rmSync(tempParent, { recursive: true, force: true });
+    }
+  });
 });

@@ -59,6 +59,16 @@ export interface WWebJSDriverOptions {
   readonly teardownTimeoutMs?: number;
   readonly executablePath?: string;
   readonly clientFactory?: (options: pkg.ClientOptions) => WWebJSClientInterface;
+  /**
+   * Timeout in milliseconds waiting for WWebJS 'ready' event during connect.
+   * Default: 45,000 ms (45s).
+   */
+  readonly readyTimeoutMs?: number;
+  /**
+   * Whether connect() awaits the 'ready' event before resolving.
+   * Default: true.
+   */
+  readonly awaitReady?: boolean;
 }
 
 /**
@@ -78,6 +88,8 @@ export class WWebJSDriver implements IWhatsAppDriver {
   private readonly teardownTimeoutMs: number;
   private readonly executablePath: string | undefined;
   private readonly clientFactory: (options: pkg.ClientOptions) => WWebJSClientInterface;
+  private readonly readyTimeoutMs: number;
+  private readonly awaitReady: boolean;
 
   private client: WWebJSClientInterface | null = null;
   private qrCode: string | undefined = undefined;
@@ -87,8 +99,8 @@ export class WWebJSDriver implements IWhatsAppDriver {
     connected: false,
   };
 
-  private messageHandler: ((msg: InboundMessage) => Promise<void>) | null = null;
-  private statusHandler: ((status: EngineStatus) => void) | null = null;
+  private readonly messageHandlers: Set<(msg: InboundMessage) => Promise<void>> = new Set();
+  private readonly statusHandlers: Set<(status: EngineStatus) => void> = new Set();
 
   constructor(options: WWebJSDriverOptions = {}) {
     this.authDir = options.authDir ?? process.env.AUTH_DIR_WWEBJS ?? "/data/auth/wwebjs";
@@ -99,6 +111,8 @@ export class WWebJSDriver implements IWhatsAppDriver {
     this.clientFactory =
       options.clientFactory ??
       ((opts: pkg.ClientOptions) => new Client(opts) as unknown as WWebJSClientInterface);
+    this.readyTimeoutMs = options.readyTimeoutMs ?? 45_000;
+    this.awaitReady = options.awaitReady ?? true;
   }
 
   public getStatus(): EngineStatus {
@@ -137,11 +151,11 @@ export class WWebJSDriver implements IWhatsAppDriver {
   }
 
   public onMessage(handler: (msg: InboundMessage) => Promise<void>): void {
-    this.messageHandler = handler;
+    this.messageHandlers.add(handler);
   }
 
   public onStatusChange(handler: (status: EngineStatus) => void): void {
-    this.statusHandler = handler;
+    this.statusHandlers.add(handler);
   }
 
   public async connect(): Promise<void> {
@@ -169,7 +183,70 @@ export class WWebJSDriver implements IWhatsAppDriver {
       this.client = client;
       this.wireClientEvents(client);
 
-      await client.initialize();
+      if (!this.awaitReady) {
+        await client.initialize();
+        return;
+      }
+
+      // INVARIANT: Callers must only proceed when the driver is genuinely ready to send and receive messages
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        let timer: NodeJS.Timeout | undefined;
+
+        const cleanup = () => {
+          if (timer) clearTimeout(timer);
+          client.on("ready", () => {});
+        };
+
+        const onReady = () => {
+          if (!settled) {
+            settled = true;
+            cleanup();
+            resolve();
+          }
+        };
+
+        const onAuthFailure = (err: unknown) => {
+          if (!settled) {
+            settled = true;
+            cleanup();
+            reject(new Error(`WWebJS authentication failed: ${String(err)}`));
+          }
+        };
+
+        const onDisconnected = (reason: unknown) => {
+          if (!settled) {
+            settled = true;
+            cleanup();
+            reject(new Error(`WWebJS disconnected before ready: ${String(reason)}`));
+          }
+        };
+
+        client.on("ready", onReady);
+        client.on("auth_failure", onAuthFailure);
+        client.on("disconnected", onDisconnected);
+
+        timer = setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            cleanup();
+            reject(
+              new Error(
+                `WWebJS connect timed out waiting for 'ready' event after ${this.readyTimeoutMs}ms`,
+              ),
+            );
+          }
+        }, this.readyTimeoutMs);
+        timer.unref?.();
+
+        client.initialize().catch((err) => {
+          if (!settled) {
+            settled = true;
+            cleanup();
+            reject(err);
+          }
+        });
+      });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       this.updateStatus({
@@ -302,17 +379,19 @@ export class WWebJSDriver implements IWhatsAppDriver {
     });
 
     client.on("message", async (rawMessage: unknown) => {
-      if (!this.messageHandler || !rawMessage || typeof rawMessage !== "object") {
+      if (this.messageHandlers.size === 0 || !rawMessage || typeof rawMessage !== "object") {
         return;
       }
 
       const selfJid = client.info?.wid?._serialized;
       const inbound = mapWWebJSMessageToInbound(rawMessage as WWebJSMessageLike, selfJid);
       if (inbound) {
-        try {
-          await this.messageHandler(inbound);
-        } catch (err) {
-          this.logger.error({ err, msgId: inbound.id }, "Error in messageHandler for WWebJS");
+        for (const handler of this.messageHandlers) {
+          try {
+            await handler(inbound);
+          } catch (err) {
+            this.logger.error({ err, msgId: inbound.id }, "Error in messageHandler for WWebJS");
+          }
         }
       }
     });
@@ -333,9 +412,9 @@ export class WWebJSDriver implements IWhatsAppDriver {
 
   private updateStatus(newStatus: EngineStatus): void {
     this.status = newStatus;
-    if (this.statusHandler) {
+    for (const handler of this.statusHandlers) {
       try {
-        this.statusHandler(this.status);
+        handler(this.status);
       } catch (err) {
         this.logger.error({ err }, "Error in statusHandler callback");
       }

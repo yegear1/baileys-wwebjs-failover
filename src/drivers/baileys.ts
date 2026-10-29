@@ -23,6 +23,26 @@ export interface BaileysDriverOptions {
     authDir: string,
   ) => Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }>;
   readonly sendMessageTimeoutMs?: number;
+  /**
+   * Whether to automatically reconnect with exponential backoff on transient socket drops.
+   * Default: true.
+   */
+  readonly autoReconnect?: boolean;
+  /**
+   * Maximum consecutive reconnect attempts before transitioning to ERROR.
+   * Default: 5.
+   */
+  readonly reconnectMaxAttempts?: number;
+  /**
+   * Initial delay in milliseconds for exponential backoff.
+   * Default: 1,000 ms.
+   */
+  readonly reconnectInitialDelayMs?: number;
+  /**
+   * Maximum delay cap in milliseconds for exponential backoff.
+   * Default: 30,000 ms.
+   */
+  readonly reconnectMaxDelayMs?: number;
 }
 
 export class BaileysSendTimeoutError extends Error {
@@ -55,6 +75,10 @@ export class BaileysDriver implements IWhatsAppDriver {
     authDir: string,
   ) => Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }>;
   private readonly sendMessageTimeoutMs: number;
+  private readonly autoReconnect: boolean;
+  private readonly reconnectMaxAttempts: number;
+  private readonly reconnectInitialDelayMs: number;
+  private readonly reconnectMaxDelayMs: number;
 
   private socket: WASocket | null = null;
   private qrCode: string | undefined = undefined;
@@ -64,8 +88,12 @@ export class BaileysDriver implements IWhatsAppDriver {
     connected: false,
   };
 
-  private messageHandler: ((msg: InboundMessage) => Promise<void>) | null = null;
-  private statusHandler: ((status: EngineStatus) => void) | null = null;
+  private readonly messageHandlers: Set<(msg: InboundMessage) => Promise<void>> = new Set();
+  private readonly statusHandlers: Set<(status: EngineStatus) => void> = new Set();
+
+  private isIntentionalDisconnect = false;
+  private reconnectTimer: NodeJS.Timeout | undefined = undefined;
+  private reconnectAttempt = 0;
 
   constructor(options: BaileysDriverOptions = {}) {
     this.authDir = options.authDir ?? process.env.AUTH_DIR_BAILEYS ?? "/data/auth/baileys";
@@ -77,6 +105,10 @@ export class BaileysDriver implements IWhatsAppDriver {
       (process.env.SEND_MESSAGE_TIMEOUT_MS
         ? Number.parseInt(process.env.SEND_MESSAGE_TIMEOUT_MS, 10)
         : 15000);
+    this.autoReconnect = options.autoReconnect ?? true;
+    this.reconnectMaxAttempts = options.reconnectMaxAttempts ?? 5;
+    this.reconnectInitialDelayMs = options.reconnectInitialDelayMs ?? 1000;
+    this.reconnectMaxDelayMs = options.reconnectMaxDelayMs ?? 30000;
   }
 
   public getStatus(): EngineStatus {
@@ -107,14 +139,27 @@ export class BaileysDriver implements IWhatsAppDriver {
   }
 
   public onMessage(handler: (msg: InboundMessage) => Promise<void>): void {
-    this.messageHandler = handler;
+    this.messageHandlers.add(handler);
   }
 
   public onStatusChange(handler: (status: EngineStatus) => void): void {
-    this.statusHandler = handler;
+    this.statusHandlers.add(handler);
   }
 
   public async connect(): Promise<void> {
+    this.isIntentionalDisconnect = false;
+    this.clearReconnectTimer();
+
+    // INVARIANT: Clean up any prior socket reference before creating a new connection to prevent leaks
+    if (this.socket) {
+      try {
+        this.socket.end(undefined);
+      } catch {
+        // Socket may already be closed
+      }
+      this.socket = null;
+    }
+
     ensureSecureAuthDirectory(this.authDir);
 
     const { state, saveCreds } = await this.authStateLoader(this.authDir);
@@ -149,6 +194,10 @@ export class BaileysDriver implements IWhatsAppDriver {
   }
 
   public async disconnect(): Promise<void> {
+    this.isIntentionalDisconnect = true;
+    this.clearReconnectTimer();
+    this.reconnectAttempt = 0;
+
     if (this.socket) {
       try {
         this.socket.end(undefined);
@@ -212,6 +261,8 @@ export class BaileysDriver implements IWhatsAppDriver {
     }
 
     if (update.connection === "open") {
+      this.reconnectAttempt = 0;
+      this.clearReconnectTimer();
       this.qrCode = undefined;
       this.updateStatus({
         engine: "baileys",
@@ -249,6 +300,69 @@ export class BaileysDriver implements IWhatsAppDriver {
       connected: false,
       ...(errorMessage !== undefined ? { error: errorMessage } : {}),
     });
+
+    // INVARIANT: Do not reconnect if unlinked/logged out, if explicitly disconnected by caller,
+    // or if autoReconnect is disabled.
+    if (this.isIntentionalDisconnect || isLoggedOut || !this.autoReconnect) {
+      return;
+    }
+
+    this.scheduleReconnect(statusCode, errorMessage);
+  }
+
+  private scheduleReconnect(statusCode?: number, errorMessage?: string): void {
+    this.clearReconnectTimer();
+
+    if (this.reconnectAttempt >= this.reconnectMaxAttempts) {
+      this.logger.warn(
+        { attempts: this.reconnectAttempt, maxAttempts: this.reconnectMaxAttempts },
+        "Baileys auto-reconnect attempts exhausted; transitioning to ERROR",
+      );
+      this.updateStatus({
+        engine: "baileys",
+        state: "ERROR",
+        connected: false,
+        error: `Auto-reconnect failed after ${this.reconnectAttempt} attempts`,
+      });
+      return;
+    }
+
+    const delay = Math.min(
+      this.reconnectInitialDelayMs * 2 ** this.reconnectAttempt,
+      this.reconnectMaxDelayMs,
+    );
+    this.reconnectAttempt += 1;
+
+    this.logger.info(
+      {
+        attempt: this.reconnectAttempt,
+        maxAttempts: this.reconnectMaxAttempts,
+        delayMs: delay,
+        statusCode,
+        reason: errorMessage,
+      },
+      "Scheduling transient Baileys reconnect with exponential backoff",
+    );
+
+    this.reconnectTimer = setTimeout(async () => {
+      if (this.isIntentionalDisconnect) return;
+      try {
+        await this.connect();
+      } catch (err) {
+        this.logger.warn({ err }, "Baileys auto-reconnect attempt failed");
+        if (!this.status.connected && !this.isIntentionalDisconnect) {
+          this.scheduleReconnect(undefined, err instanceof Error ? err.message : String(err));
+        }
+      }
+    }, delay);
+    this.reconnectTimer.unref?.();
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
   }
 
   private connectedStateClean(): void {
@@ -256,7 +370,7 @@ export class BaileysDriver implements IWhatsAppDriver {
   }
 
   private async handleMessagesUpsert(upsert: { messages: unknown[]; type: string }): Promise<void> {
-    if (!this.messageHandler) return;
+    if (this.messageHandlers.size === 0) return;
 
     const selfJid = this.socket?.user?.id;
 
@@ -269,10 +383,12 @@ export class BaileysDriver implements IWhatsAppDriver {
       );
 
       if (inbound) {
-        try {
-          await this.messageHandler(inbound);
-        } catch (err) {
-          this.logger.error({ err, msgId: inbound.id }, "Error in messageHandler");
+        for (const handler of this.messageHandlers) {
+          try {
+            await handler(inbound);
+          } catch (err) {
+            this.logger.error({ err, msgId: inbound.id }, "Error in messageHandler");
+          }
         }
       }
     }
@@ -288,9 +404,9 @@ export class BaileysDriver implements IWhatsAppDriver {
 
   private updateStatus(newStatus: EngineStatus): void {
     this.status = newStatus;
-    if (this.statusHandler) {
+    for (const handler of this.statusHandlers) {
       try {
-        this.statusHandler(this.status);
+        handler(this.status);
       } catch (err) {
         this.logger.error({ err }, "Error in statusHandler callback");
       }

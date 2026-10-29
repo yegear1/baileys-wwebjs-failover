@@ -1,4 +1,4 @@
-import type { EngineName, IWhatsAppDriver } from "../contracts/driver.js";
+import type { EngineName, EngineStatus, IWhatsAppDriver } from "../contracts/driver.js";
 import type { InboundMessage, MessageReceipt, OutboundMessage } from "../contracts/messages.js";
 import { logger } from "../index.js";
 import { checkHostConnectivity } from "../utils/host-connectivity.js";
@@ -29,6 +29,11 @@ export interface FailoverOrchestratorOptions {
    */
   readonly probeIntervalMs?: number;
   /**
+   * Deterministic timeout in milliseconds waiting for primary driver to connect during silent probe.
+   * Default: 5,000 ms (5s).
+   */
+  readonly probeTimeoutMs?: number;
+  /**
    * Whether to disable automated background probe timer (useful in tests).
    * Default: false.
    */
@@ -51,6 +56,7 @@ export class FailoverOrchestrator {
   private readonly fencingLock: IFencingLock;
   private readonly circuitBreaker: CircuitBreaker;
   private readonly probeIntervalMs: number;
+  private readonly probeTimeoutMs: number;
   private readonly disableBackgroundProbeTimer: boolean;
   private readonly hostConnectivityProbe: () => Promise<boolean>;
   private readonly enableHostConnectivityGuard: boolean;
@@ -62,10 +68,13 @@ export class FailoverOrchestrator {
 
   private readonly stateListeners: Set<StateChangeListener> = new Set();
   private readonly messageListeners: Set<(msg: InboundMessage) => Promise<void>> = new Set();
+  private readonly probeStatusListeners: Set<(status: EngineStatus) => void> = new Set();
   private readonly outboundBuffer: BufferedOutboundItem[] = [];
 
   private probeTimer: ReturnType<typeof setInterval> | undefined = undefined;
   private isTransitioning = false;
+  private isProbing = false;
+  private isShuttingDown = false;
 
   constructor(options: FailoverOrchestratorOptions) {
     this.primary = options.primaryDriver;
@@ -73,6 +82,7 @@ export class FailoverOrchestrator {
     this.fencingLock = options.fencingLock ?? new InMemoryFencingLock();
     this.circuitBreaker = new CircuitBreaker(options.circuitBreakerOptions);
     this.probeIntervalMs = options.probeIntervalMs ?? 10_000;
+    this.probeTimeoutMs = options.probeTimeoutMs ?? 5_000;
     this.disableBackgroundProbeTimer = options.disableBackgroundProbeTimer ?? false;
     this.enableHostConnectivityGuard =
       options.enableHostConnectivityGuard ?? options.hostConnectivityProbe !== undefined;
@@ -298,14 +308,32 @@ export class FailoverOrchestrator {
    * Returns true if the probe succeeds.
    */
   async executeSilentProbe(): Promise<boolean> {
-    if (this.state !== "FALLBACK_ACTIVE") return false;
+    if (this.state !== "FALLBACK_ACTIVE" || this.isProbing || this.isShuttingDown) return false;
+    this.isProbing = true;
 
     try {
       this.circuitBreaker.startProbe();
-      await this.primary.connect();
-      const status = this.primary.getStatus();
 
-      if (status.connected) {
+      // INVARIANT: Inspect existing primary connection state before attempting reconnection
+      const currentStatus = this.primary.getStatus();
+      if (currentStatus.connected) {
+        const recovered = this.circuitBreaker.recordSuccess();
+        logger.info(
+          { probeSuccesses: this.circuitBreaker.getProbeSuccesses() },
+          "Silent probe confirmed already-connected primary stability",
+        );
+        if (recovered) {
+          logger.info("Silent probe confirmed primary stability; initiating recovery swap");
+          void this.triggerFailback("Silent probe verified primary stability");
+        }
+        return true;
+      }
+
+      // If disconnected, await connection completion (CONNECTED state) with deterministic timeout
+      const connectPromise = this.primary.connect();
+      const connected = await this.waitForPrimaryConnected(connectPromise);
+
+      if (connected) {
         const recovered = this.circuitBreaker.recordSuccess();
         logger.info(
           { probeSuccesses: this.circuitBreaker.getProbeSuccesses() },
@@ -318,12 +346,58 @@ export class FailoverOrchestrator {
         return true;
       }
 
+      // Probe failed or timed out: safely teardown probe sockets to prevent leaks
       this.circuitBreaker.recordFailure("Primary status not connected during probe");
+      await this.disconnectPrimarySafely();
       return false;
     } catch (error) {
       this.circuitBreaker.recordFailure(error);
+      await this.disconnectPrimarySafely();
       return false;
+    } finally {
+      this.isProbing = false;
     }
+  }
+
+  private async waitForPrimaryConnected(connectPromise: Promise<void>): Promise<boolean> {
+    if (this.primary.getStatus().connected) {
+      return true;
+    }
+
+    await connectPromise;
+
+    if (this.primary.getStatus().connected) {
+      return true;
+    }
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+
+      const finish = (result: boolean) => {
+        if (!settled) {
+          settled = true;
+          if (timer) clearTimeout(timer);
+          this.probeStatusListeners.delete(onStatus);
+          resolve(result);
+        }
+      };
+
+      const onStatus = (status: EngineStatus) => {
+        if (status.connected) {
+          finish(true);
+        } else if (status.state === "ERROR" || status.state === "UNPAIRED") {
+          finish(false);
+        }
+      };
+
+      this.probeStatusListeners.add(onStatus);
+
+      timer = setTimeout(() => {
+        finish(false);
+      }, this.probeTimeoutMs);
+      timer.unref?.();
+    });
   }
 
   /**
@@ -331,6 +405,7 @@ export class FailoverOrchestrator {
    */
   async shutdown(): Promise<void> {
     logger.info("Shutting down FailoverOrchestrator");
+    this.isShuttingDown = true;
     this.stopSilentProbeLoop();
 
     // Reject remaining buffered messages
@@ -366,8 +441,18 @@ export class FailoverOrchestrator {
       }
     });
 
-    // Primary driver health monitoring
+    // Primary driver health monitoring & probe status subscription
     this.primary.onStatusChange((status) => {
+      if (this.isShuttingDown) return;
+
+      for (const listener of this.probeStatusListeners) {
+        try {
+          listener(status);
+        } catch (err) {
+          logger.error({ err }, "Error in probeStatusListener callback");
+        }
+      }
+
       if (
         this.state === "PRIMARY_ACTIVE" &&
         (status.state === "ERROR" || status.state === "DISCONNECTED")
@@ -376,6 +461,29 @@ export class FailoverOrchestrator {
         if (tripped) {
           logger.warn({ status }, "Circuit breaker tripped due to primary driver status change");
           void this.triggerFailover("Primary socket degraded/disconnected");
+        }
+      }
+    });
+
+    // Standby driver health monitoring during FALLBACK_ACTIVE
+    this.standby.onStatusChange((status) => {
+      if (this.isShuttingDown) return;
+
+      if (
+        this.state === "FALLBACK_ACTIVE" &&
+        (status.state === "ERROR" || status.state === "DISCONNECTED" || status.state === "UNPAIRED")
+      ) {
+        this.lastError = status.error ?? `Standby driver status changed to ${status.state}`;
+        logger.error(
+          { status, state: this.state },
+          "Standby driver degraded or disconnected during FALLBACK_ACTIVE",
+        );
+
+        if (this.primary.getStatus().connected) {
+          logger.info("Primary driver is connected; triggering immediate failback recovery");
+          void this.triggerFailback("Standby crashed and primary is healthy");
+        } else {
+          void this.executeSilentProbe();
         }
       }
     });
