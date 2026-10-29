@@ -36,6 +36,7 @@ export interface IWhatsAppDriver {
   sendMessage(to: string, content: OutboundMessage): Promise<MessageReceipt>;
   sendPresence?(to: string, state: PresenceState): Promise<void>;
   getSelfJid?(): string | undefined;
+  getQrCode?(): string | undefined;
   onMessage(handler: (msg: InboundMessage) => Promise<void>): void;
   onStatusChange(handler: (status: EngineStatus) => void): void;
   getStatus(): EngineStatus;
