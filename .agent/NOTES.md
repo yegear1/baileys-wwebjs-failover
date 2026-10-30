@@ -87,6 +87,9 @@ $$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textB
 | `/qr/baileys` | `GET` | `{ engine: "baileys", status: "UNPAIRED" \| "PAIRING_QR_READY" \| "CONNECTED", qr_raw?: string, qr_svg?: string }` | Dedicated QR code for primary session |
 | `/qr/wwebjs` | `GET` | `{ engine: "wwebjs", status: "UNPAIRED" \| "PAIRING_QR_READY" \| "STANDBY" \| "CONNECTED", qr_raw?: string, qr_svg?: string }` | Dedicated QR code for standby session |
 
+**VictoriaLogs NDJSON Logging Contract:**
+- `createGatewayLogger()` emits single-line NDJSON on `stdout` (`NO_COLOR=1`, zero pretty-printers) with root `timestamp` (ISO-8601 UTC), lowercase `level` (`debug`, `info`, `warn`, `error`), `service`, `app`, `env`, and `message`. High-cardinality identifiers (JIDs, message IDs, request IDs) are strictly event-level properties, never stream labels.
+
 ---
 
 ### 5. Auth Storage & Chromium Hygiene Contracts

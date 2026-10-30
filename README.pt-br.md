@@ -88,6 +88,9 @@ cp .env.example .env
 | Variável | Descrição | Padrão | Obrigatório |
 | :--- | :--- | :--- | :--- |
 | `NODE_ENV` | Modo do ambiente de execução | `development` | Não |
+| `SERVICE_NAME` | Identificador do serviço e aplicação nos streams NDJSON do VictoriaLogs | `baileys-wwebjs-failover` | Não |
+| `LOG_LEVEL` | Nível mínimo de severidade de log (`debug`, `info`, `warn`, `error`) | `info` | Não |
+| `NO_COLOR` | Desativa códigos ANSI de cores no stdout do container | `1` | Não |
 | `PORT` | Porta HTTP para `/health`, `/metrics` e `/qr/*` | `3000` | Não |
 | `REDIS_URL` | URL de conexão com o Redis | `redis://127.0.0.1:6379` | Sim |
 | `REDIS_PORT` | Porta em loopback no host mapeada pelo Compose para o Redis | `6379` | Não |

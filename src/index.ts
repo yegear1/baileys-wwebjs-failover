@@ -1,8 +1,36 @@
-import pino from "pino";
+import pino, { type DestinationStream, type Logger } from "pino";
 
-export const logger = pino({
-  level: process.env.LOG_LEVEL ?? "info",
-});
+export interface GatewayLoggerOptions {
+  readonly level?: string;
+  readonly service?: string;
+  readonly env?: string;
+  readonly destination?: DestinationStream;
+}
+
+export function createGatewayLogger(options?: GatewayLoggerOptions): Logger {
+  const serviceName = options?.service || process.env.SERVICE_NAME || "baileys-wwebjs-failover";
+  const envName =
+    options?.env || (process.env.NODE_ENV === "development" ? "development" : "production");
+
+  // INVARIANT: Emit canonical single-line NDJSON matching VictoriaLogs + Vector schema (timestamp ISO-8601 UTC, lowercase level, root message key, low-cardinality stream base)
+  const pinoOptions: pino.LoggerOptions = {
+    level: options?.level || process.env.LOG_LEVEL || "info",
+    messageKey: "message",
+    formatters: {
+      level: (label) => ({ level: label }),
+    },
+    base: {
+      service: serviceName,
+      app: serviceName,
+      env: envName,
+    },
+    timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
+  };
+
+  return options?.destination ? pino(pinoOptions, options.destination) : pino(pinoOptions);
+}
+
+export const logger: Logger = createGatewayLogger();
 
 export interface GatewayInfo {
   readonly name: string;

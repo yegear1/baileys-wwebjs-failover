@@ -88,6 +88,9 @@ cp .env.example .env
 | Variable | Description | Default | Required |
 | :--- | :--- | :--- | :--- |
 | `NODE_ENV` | Runtime environment mode | `development` | No |
+| `SERVICE_NAME` | Service and application identifier in VictoriaLogs NDJSON streams | `baileys-wwebjs-failover` | No |
+| `LOG_LEVEL` | Minimum log severity (`debug`, `info`, `warn`, `error`) | `info` | No |
+| `NO_COLOR` | Disable ANSI escape codes in container stdout | `1` | No |
 | `PORT` | HTTP server port for `/health`, `/metrics`, and `/qr/*` | `3000` | No |
 | `REDIS_URL` | Redis connection URL | `redis://127.0.0.1:6379` | Yes |
 | `REDIS_PORT` | Host loopback port mapped by Compose to Redis | `6379` | No |
