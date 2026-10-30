@@ -7,10 +7,24 @@
 
 ## Active Task
 
-### [None] Backlog Cleared
+### [04.2] Automated Session Purge & QR Regeneration on Companion Logout
 
-**Status:** READY FOR INSTRUCTION
-**Objective:** All epics, integration milestones, and hardening refactoring tasks ([90.1]–[90.8]) are complete. Awaiting human instructions or release direction.
+**Status:** `PLANNING`
+**Objective:** Automatically purge invalidated authentication files (`0700` re-initialization) and regenerate a fresh pairing QR session when either companion device is explicitly logged out (`DisconnectReason.loggedOut` / 401 in Baileys or `LOGOUT` / `auth_failure` in WWebJS), while triggering failover if the primary engine is unlinked.
+
+**Implementation Plan:**
+1. **Auth Directory Purge Utility ([src/drivers/auth-utils.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/src/drivers/auth-utils.ts)):**
+   - Implement `purgeAuthDirectory(dirPath: string): void` to safely wipe all stale credential/profile contents inside `dirPath` while preserving the directory root (to remain compatible with Docker volume bind mounts) and re-enforcing `0700` permissions via `ensureSecureAuthDirectory(dirPath)`.
+2. **Baileys Companion Logout Purge & QR Regeneration ([src/drivers/baileys.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/src/drivers/baileys.ts)):**
+   - Add `autoPurgeOnLogout?: boolean` option (default `true`).
+   - When `handleDisconnect` detects `DisconnectReason.loggedOut` (401), invoke `purgeAuthDirectory(this.authDir)` to clear the invalidated noise/signal keys, transition status to `UNPAIRED`, and schedule a clean `connect()` initialization so Baileys immediately generates a fresh pairing QR (`PAIRING_QR_READY`) without requiring manual volume deletion or container restart.
+3. **WWebJS Companion Logout Purge ([src/drivers/wwebjs.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/src/drivers/wwebjs.ts)):**
+   - Add `autoPurgeOnLogout?: boolean` option (default `true`).
+   - When `auth_failure` or `disconnected` with `LOGOUT` / `NAVIGATION` occurs, tear down the Chromium instance cleanly, invoke `purgeAuthDirectory(this.authDir)` to remove invalidated LocalAuth Chromium profile data, and transition to `UNPAIRED`.
+4. **Orchestrator Unpaired Primary Handling ([src/fsm/orchestrator.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/src/fsm/orchestrator.ts)):**
+   - In `PRIMARY_ACTIVE`, if the primary driver transitions to `UNPAIRED` (explicit companion logout), immediately trip the circuit breaker and initiate failover to standby (`triggerFailover("Primary companion device logged out / unpaired")`).
+5. **Verification ([tests/baileys.test.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/tests/baileys.test.ts), [tests/wwebjs.test.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/tests/wwebjs.test.ts), [tests/orchestrator.test.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/tests/orchestrator.test.ts)):**
+   - Unit and integration tests verifying `purgeAuthDirectory` preserves the mount root while wiping stale files, Baileys 401 logout wipes auth state and regenerates a fresh QR code, WWebJS logout wipes profile state, and `FailoverOrchestrator` fails over immediately when primary becomes `UNPAIRED`.
 
 ---
 
@@ -39,12 +53,13 @@
 | [90.6] | Dynamic Chromium Health & Standby Puppeteer Restart Recovery | [`a6bb283`] | 2026-10-29 |
 | [90.7] | End-to-End Load & Sustained Queue Concurrency Verification | [`184a6ed`] | 2026-10-29 |
 | [90.8] | Soak Test & Long-Running Memory Leak Audit | [`59739d7`] | 2026-10-29 |
+| [04.1] | Multi-Tier Outbound Queue, Priority Jitter Delays & Typing Presence | [`e52cbf6`] | 2026-10-30 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- (Backlog clear for active refactoring cycle)
+- `[04.3]` VictoriaLogs Canonical NDJSON Logging & Docker Hygiene (`service`, `app`, `env`, ISO-8601 `timestamp`, `NO_COLOR=1`)
 
 ---
 

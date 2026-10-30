@@ -1,4 +1,9 @@
-import type { EngineName, EngineStatus, IWhatsAppDriver } from "../contracts/driver.js";
+import type {
+  EngineName,
+  EngineStatus,
+  IWhatsAppDriver,
+  PresenceState,
+} from "../contracts/driver.js";
 import type { InboundMessage, MessageReceipt, OutboundMessage } from "../contracts/messages.js";
 import { logger } from "../index.js";
 import { checkHostConnectivity } from "../utils/host-connectivity.js";
@@ -212,6 +217,27 @@ export class FailoverOrchestrator {
         void this.triggerFailover("Consecutive send failures exceeded threshold");
       }
       throw error;
+    }
+  }
+
+  /**
+   * Dispatches a best-effort presence update (e.g. composing/paused) via the currently active driver.
+   *
+   * INVARIANT: Presence errors are non-critical and must never trip the circuit breaker
+   * or abort message delivery.
+   */
+  async sendPresence(to: string, state: PresenceState): Promise<void> {
+    if (this.isShuttingDown || this.state === "SHUTDOWN" || this.isBufferingState()) {
+      return;
+    }
+    const currentDriver = this.getCurrentActiveDriver();
+    if (!currentDriver?.sendPresence) {
+      return;
+    }
+    try {
+      await currentDriver.sendPresence(to, state);
+    } catch (err) {
+      logger.warn({ err, to, state }, "Failed to send presence via active driver; ignoring");
     }
   }
 

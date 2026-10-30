@@ -67,6 +67,7 @@ stateDiagram-v2
 - **Saúde Dinâmica do Chromium e Recuperação com Reinicialização do Standby:** Monitora continuamente a atividade de processos no SO, estados de processo zumbi, conectividade de sessão CDP e responsividade de página, com reinicialização graciosa automática do Puppeteer e proteção de buffer em memória.
 - **Guarda de Conectividade WAN do Host:** Valida conectividade de internet antes de iniciar o failover, evitando inicialização desnecessária do Chromium durante quedas de WAN.
 - **Fila Zero-Loss e Dead-Letter Queue (DLQ):** Reenfileira automaticamente mensagens com falha transitória e direciona mensagens esgotadas ou malformadas para `whatsapp:send:dlq`.
+- **Filas de Saída Multi-Tier e Jitter Anti-Ban:** Consome `whatsapp:send:priority` estritamente antes de `whatsapp:send:low`, aplicando atrasos aleatórios anti-ban nas faixas `urgent` (300–800ms), `normal` (1.5–3.5s) e `low` (10–20s) com simulação proporcional de presença de digitação (`composing`).
 
 ## Início Rápido
 
@@ -99,10 +100,18 @@ cp .env.example .env
 | `SEND_MESSAGE_TIMEOUT_MS` | Timeout em ms para operações de envio no Baileys | `15000` | Não |
 | `MAX_SEND_RETRIES` | Limite de tentativas para mensagens com falha de envio | `3` | Não |
 | `DLQ_QUEUE_KEY` | Chave da fila Redis para mensagens de saída esgotadas/malformadas | `whatsapp:send:dlq` | Não |
+| `ENABLE_TYPING_PRESENCE` | Simula presença de digitação (`composing`) antes do envio de texto | `true` | Não |
+| `URGENT_DELAY_MIN_MS` | Atraso mínimo de jitter (ms) para mensagens `urgent` | `300` | Não |
+| `URGENT_DELAY_MAX_MS` | Atraso máximo de jitter (ms) para mensagens `urgent` | `800` | Não |
+| `NORMAL_DELAY_MIN_MS` | Atraso mínimo de jitter (ms) para mensagens `normal` | `1500` | Não |
+| `NORMAL_DELAY_MAX_MS` | Atraso máximo de jitter (ms) para mensagens `normal` | `3500` | Não |
+| `LOW_DELAY_MIN_MS` | Atraso mínimo de jitter (ms) para mensagens `low` | `10000` | Não |
+| `LOW_DELAY_MAX_MS` | Atraso máximo de jitter (ms) para mensagens `low` | `20000` | Não |
 | `KEEPALIVE_INTERVAL_DAYS_MIN` | Intervalo mínimo (em dias) entre pings de manutenção | `3` | Não |
 | `KEEPALIVE_INTERVAL_DAYS_MAX` | Intervalo máximo (em dias) entre pings de manutenção | `5` | Não |
 | `INBOX_QUEUE_KEY` | Chave da fila Redis para mensagens de entrada normalizadas | `whatsapp:receive:inbox` | Não |
 | `OUTBOUND_QUEUE_KEY` | Chave da fila prioritária Redis para mensagens de saída | `whatsapp:send:priority` | Não |
+| `LOW_PRIORITY_OUTBOUND_QUEUE_KEY` | Chave da fila de baixa prioridade Redis para mensagens de saída | `whatsapp:send:low` | Não |
 | `FENCING_LOCK_KEY` | Chave do lock distribuído de fencing no Redis | `gateway:active_engine` | Não |
 | `BLPOP_TIMEOUT_SECONDS` | Timeout bloqueante (segundos) na fila Redis de saída | `2` | Não |
 | `SHUTDOWN_TIMEOUT_MS` | Timeout em milissegundos para encerramento gracioso | `10000` | Não |

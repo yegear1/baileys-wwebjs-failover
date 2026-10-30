@@ -69,7 +69,7 @@ class InMemoryRedisClient implements ITestRedisClient {
   private readonly lists: Map<string, string[]>;
   private readonly expirations: Map<string, number>;
   private readonly waiters: Array<{
-    key: string;
+    keys: string[];
     resolve: (res: { key: string; element: string } | null) => void;
   }>;
 
@@ -78,7 +78,7 @@ class InMemoryRedisClient implements ITestRedisClient {
     sharedLists?: Map<string, string[]>,
     sharedExpirations?: Map<string, number>,
     sharedWaiters?: Array<{
-      key: string;
+      keys: string[];
       resolve: (res: { key: string; element: string } | null) => void;
     }>,
   ) {
@@ -152,7 +152,7 @@ class InMemoryRedisClient implements ITestRedisClient {
     const items = Array.isArray(elements) ? elements : [elements];
 
     for (const item of items) {
-      const waiterIdx = this.waiters.findIndex((w) => w.key === key);
+      const waiterIdx = this.waiters.findIndex((w) => w.keys.includes(key));
       if (waiterIdx >= 0) {
         const waiter = this.waiters.splice(waiterIdx, 1)[0];
         if (waiter) {
@@ -284,7 +284,7 @@ class InMemoryRedisClient implements ITestRedisClient {
     return new Promise<{ key: string; element: string } | null>((resolve) => {
       let timer: NodeJS.Timeout | undefined;
       const waiter = {
-        key: firstKey,
+        keys: targetKeys,
         resolve: (val: { key: string; element: string } | null) => {
           if (timer) clearTimeout(timer);
           resolve(val);
@@ -397,7 +397,7 @@ export async function setupRedisTestEnvironment(): Promise<RedisTestEnvironment>
   const sharedLists = new Map<string, string[]>();
   const sharedExpirations = new Map<string, number>();
   const sharedWaiters: Array<{
-    key: string;
+    keys: string[];
     resolve: (res: { key: string; element: string } | null) => void;
   }> = [];
 

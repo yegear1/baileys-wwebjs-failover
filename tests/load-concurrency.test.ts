@@ -146,6 +146,13 @@ describe("End-to-End Load & Sustained Queue Concurrency Verification", () => {
       OUTBOUND_QUEUE_KEY: outboundKey,
       DLQ_QUEUE_KEY: dlqKey,
       FENCING_LOCK_KEY: fencingKey,
+      ENABLE_HOST_CONNECTIVITY_GUARD: "false",
+      URGENT_DELAY_MIN_MS: "0",
+      URGENT_DELAY_MAX_MS: "0",
+      NORMAL_DELAY_MIN_MS: "0",
+      NORMAL_DELAY_MAX_MS: "0",
+      LOW_DELAY_MIN_MS: "0",
+      LOW_DELAY_MAX_MS: "0",
     });
 
     const redisClient = await redisEnv.createClient();
@@ -243,6 +250,13 @@ describe("End-to-End Load & Sustained Queue Concurrency Verification", () => {
       OUTBOUND_QUEUE_KEY: outboundKey,
       DLQ_QUEUE_KEY: dlqKey,
       FENCING_LOCK_KEY: fencingKey,
+      ENABLE_HOST_CONNECTIVITY_GUARD: "false",
+      URGENT_DELAY_MIN_MS: "0",
+      URGENT_DELAY_MAX_MS: "0",
+      NORMAL_DELAY_MIN_MS: "0",
+      NORMAL_DELAY_MAX_MS: "0",
+      LOW_DELAY_MIN_MS: "0",
+      LOW_DELAY_MAX_MS: "0",
     });
 
     const redisClient = await redisEnv.createClient();
@@ -336,6 +350,12 @@ describe("End-to-End Load & Sustained Queue Concurrency Verification", () => {
       INBOX_QUEUE_KEY: inboxKey,
       OUTBOUND_QUEUE_KEY: outboundKey,
       FENCING_LOCK_KEY: fencingKey,
+      URGENT_DELAY_MIN_MS: "0",
+      URGENT_DELAY_MAX_MS: "0",
+      NORMAL_DELAY_MIN_MS: "0",
+      NORMAL_DELAY_MAX_MS: "0",
+      LOW_DELAY_MIN_MS: "0",
+      LOW_DELAY_MAX_MS: "0",
     });
 
     const redisClient = await redisEnv.createClient();
@@ -433,6 +453,12 @@ describe("End-to-End Load & Sustained Queue Concurrency Verification", () => {
       INBOX_QUEUE_KEY: inboxKey,
       OUTBOUND_QUEUE_KEY: outboundKey,
       FENCING_LOCK_KEY: fencingKey,
+      URGENT_DELAY_MIN_MS: "0",
+      URGENT_DELAY_MAX_MS: "0",
+      NORMAL_DELAY_MIN_MS: "0",
+      NORMAL_DELAY_MAX_MS: "0",
+      LOW_DELAY_MIN_MS: "0",
+      LOW_DELAY_MAX_MS: "0",
     });
 
     const redisClient = await redisEnv.createClient();
@@ -544,6 +570,12 @@ describe("End-to-End Load & Sustained Queue Concurrency Verification", () => {
       DLQ_QUEUE_KEY: dlqKey,
       FENCING_LOCK_KEY: fencingKey,
       SHUTDOWN_TIMEOUT_MS: "5000",
+      URGENT_DELAY_MIN_MS: "0",
+      URGENT_DELAY_MAX_MS: "0",
+      NORMAL_DELAY_MIN_MS: "0",
+      NORMAL_DELAY_MAX_MS: "0",
+      LOW_DELAY_MIN_MS: "0",
+      LOW_DELAY_MAX_MS: "0",
     });
 
     const redisClient = await redisEnv.createClient();

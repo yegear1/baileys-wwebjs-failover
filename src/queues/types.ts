@@ -9,6 +9,7 @@ import {
 
 export const DEFAULT_INBOX_QUEUE = "whatsapp:receive:inbox";
 export const DEFAULT_OUTBOUND_QUEUE = "whatsapp:send:priority";
+export const DEFAULT_LOW_PRIORITY_OUTBOUND_QUEUE = "whatsapp:send:low";
 export const DEFAULT_DLQ_QUEUE = "whatsapp:send:dlq";
 export const DEFAULT_DEDUP_PREFIX = "dedupe:msg:";
 export const DEFAULT_FENCING_KEY = "gateway:active_engine";
@@ -16,6 +17,26 @@ export const DEFAULT_DEDUP_TTL_SECONDS = 300;
 export const DEFAULT_BLPOP_TIMEOUT_SECONDS = 2;
 export const DEFAULT_MAX_SEND_RETRIES = 3;
 export const DEFAULT_SEND_MESSAGE_TIMEOUT_MS = 15000;
+export const DEFAULT_URGENT_DELAY_MIN_MS = 300;
+export const DEFAULT_URGENT_DELAY_MAX_MS = 800;
+export const DEFAULT_NORMAL_DELAY_MIN_MS = 1500;
+export const DEFAULT_NORMAL_DELAY_MAX_MS = 3500;
+export const DEFAULT_LOW_DELAY_MIN_MS = 10000;
+export const DEFAULT_LOW_DELAY_MAX_MS = 20000;
+
+export const OutboundPrioritySchema = z.enum(["urgent", "normal", "low"]);
+export type OutboundPriority = z.infer<typeof OutboundPrioritySchema>;
+
+export interface PriorityJitterBounds {
+  readonly minMs: number;
+  readonly maxMs: number;
+}
+
+export interface OutboundDelayConfig {
+  readonly urgent: PriorityJitterBounds;
+  readonly normal: PriorityJitterBounds;
+  readonly low: PriorityJitterBounds;
+}
 
 /**
  * Minimal structural interface for Redis clients, matching @redis/client (redis v4)
@@ -51,6 +72,7 @@ export const CanonicalSendPayloadSchema = z.object({
   phone_number: z.string().min(1),
   content: z.string(),
   quote_id: z.string().nullable().optional(),
+  priority: OutboundPrioritySchema.optional(),
   retryCount: z.coerce.number().int().min(0).optional(),
   lastError: z.string().optional(),
   requeuedAt: z.string().optional(),
@@ -63,6 +85,7 @@ export type CanonicalSendPayload = z.infer<typeof CanonicalSendPayloadSchema>;
 export const NativeSendPayloadSchema = OutboundMessageSchema.extend({
   id: z.string().optional(),
   quotedMessageId: z.string().nullable().optional(),
+  priority: OutboundPrioritySchema.optional(),
   retryCount: z.coerce.number().int().min(0).optional(),
   lastError: z.string().optional(),
   requeuedAt: z.string().optional(),
@@ -88,6 +111,7 @@ export interface NormalizedOutboundRequest {
   readonly id?: string | undefined;
   readonly to: string;
   readonly content: OutboundMessage;
+  readonly priority?: OutboundPriority | undefined;
   readonly retryCount?: number | undefined;
 }
 
@@ -105,12 +129,15 @@ export interface RedisQueueOptions {
   readonly blockingClient?: IRedisClient | undefined;
   readonly inboxQueueKey?: string | undefined;
   readonly outboundQueueKey?: string | undefined;
+  readonly lowPriorityOutboundQueueKey?: string | undefined;
   readonly dlqQueueKey?: string | undefined;
   readonly maxSendRetries?: number | undefined;
   readonly dedupPrefix?: string | undefined;
   readonly dedupTtlSeconds?: number | undefined;
   readonly blpopTimeoutSeconds?: number | undefined;
   readonly pauseCheckIntervalMs?: number | undefined;
+  readonly delayConfig?: Partial<OutboundDelayConfig> | undefined;
+  readonly enableTypingPresence?: boolean | undefined;
 }
 
 /**

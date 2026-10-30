@@ -41,6 +41,7 @@ export interface IWhatsAppDriver {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   sendMessage(to: string, content: OutboundMessage): Promise<MessageReceipt>;
+  sendPresence?(to: string, state: PresenceState): Promise<void>;
   onMessage(handler: (msg: InboundMessage) => Promise<void>): void;
   onStatusChange(handler: (status: EngineStatus) => void): void;
   getStatus(): EngineStatus;
@@ -56,7 +57,8 @@ export interface IWhatsAppDriver {
 | `gateway:active_engine` | Distributed Fencing Lock | String (`"baileys"` \| `"wwebjs"`) | Managed by Orchestrator | Prevents split-brain consumption |
 | `dedupe:msg:<hash>` | Inbound Deduplication | Key flag (`"1"`) | 300 seconds (`EX 300`) | At-most-once processing filter |
 | `whatsapp:receive:inbox` | Normalized Incoming Messages | Redis Queue (`LPUSH`) | `InboundMessagePayload` | Consumed by downstream workers |
-| `whatsapp:send:priority` | Outbound Message Dispatch | Redis Queue (`BLPOP`) | `SendMessagePayload` | Consumed strictly by active engine |
+| `whatsapp:send:priority` | Priority Outbound Dispatch | Redis Queue (`BLPOP`) | `SendMessagePayload` (`urgent` \| `normal`) | Drained strictly before low-priority queue |
+| `whatsapp:send:low` | Low-Priority Outbound Dispatch | Redis Queue (`BLPOP`) | `SendMessagePayload` (`low`) | Consumed when priority queue is empty |
 | `whatsapp:send:dlq` | Dead Letter Queue | Redis Queue (`LPUSH`) | Exhausted / malformed payloads | Unroutable messages after 3 retries |
 
 **Deduplication Hash Algorithm:**
@@ -64,9 +66,10 @@ $$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textB
 * Absorbs $\pm 5\text{s}$ cross-device socket clock skew.
 * Media messages use content SHA-256 or WhatsApp file hash instead of empty body.
 
-**Outbound Reliability & WAN Invariants:**
+**Outbound Reliability, Anti-Ban Jitter & WAN Invariants:**
 * Baileys send operations race against a deterministic 15s timeout (`SEND_MESSAGE_TIMEOUT_MS`).
-* Transient outbound dispatch failures are re-queued up to `MAX_SEND_RETRIES` (default: 3) before routing to `DLQ_QUEUE_KEY`.
+* Multi-tier outbound worker executes `BLPOP` across `[whatsapp:send:priority, whatsapp:send:low]`, enforcing randomized anti-ban dispatch delays (`urgent`: 300–800ms, `normal`: 1500–3500ms, `low`: 10000–20000ms) and proportional `composing` presence before message dispatch.
+* Transient outbound dispatch failures are re-queued to their originating queue key up to `MAX_SEND_RETRIES` (default: 3) before routing to `DLQ_QUEUE_KEY`.
 * Host network WAN connectivity probe validates internet reachability prior to WWebJS standby activation, preventing false failover during host internet outages.
 * Shutdown lifecycle ordering drains and cancels in-flight orchestrator buffer items before worker shutdown, safely re-queueing to Redis without retry penalty or DLQ escalation to prevent deadlocks on exit.
 * Circuit breaker consecutive failure counter strictly tracks unexpired errors within the sliding window, guaranteeing consistent decay under sustained errors, intermittent bursts, or idle periods.

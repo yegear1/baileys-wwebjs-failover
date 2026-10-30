@@ -67,6 +67,7 @@ stateDiagram-v2
 - **Dynamic Chromium Health & Standby Restart Recovery:** Continuously probes OS process liveness, zombie process states, CDP session connectivity, and page responsiveness, with automatic graceful Puppeteer relaunch and in-memory buffer protection.
 - **Host WAN Connectivity Guard:** Validates host internet reachability before initiating failovers, preventing false Chromium wakeups during host network outages.
 - **Zero-Loss Queueing & Dead-Letter Queue (DLQ):** Automatically re-queues transient send failures with backoff tracking, routing exhausted or malformed messages to `whatsapp:send:dlq`.
+- **Multi-Tier Outbound Queues & Anti-Ban Jitter:** Consumes `whatsapp:send:priority` strictly ahead of `whatsapp:send:low`, enforcing randomized anti-ban jitter delays across `urgent` (300–800ms), `normal` (1.5–3.5s), and `low` (10–20s) tiers alongside proportional `composing` presence simulation.
 
 ## Quickstart
 
@@ -99,10 +100,18 @@ cp .env.example .env
 | `SEND_MESSAGE_TIMEOUT_MS` | Timeout in ms for Baileys socket send operations | `15000` | No |
 | `MAX_SEND_RETRIES` | Maximum retry attempts for failed outbound messages | `3` | No |
 | `DLQ_QUEUE_KEY` | Redis queue key for exhausted/malformed dead-letter items | `whatsapp:send:dlq` | No |
+| `ENABLE_TYPING_PRESENCE` | Simulate typing (`composing`) presence before text dispatch | `true` | No |
+| `URGENT_DELAY_MIN_MS` | Minimum jitter delay (ms) for `urgent` outbound messages | `300` | No |
+| `URGENT_DELAY_MAX_MS` | Maximum jitter delay (ms) for `urgent` outbound messages | `800` | No |
+| `NORMAL_DELAY_MIN_MS` | Minimum jitter delay (ms) for `normal` outbound messages | `1500` | No |
+| `NORMAL_DELAY_MAX_MS` | Maximum jitter delay (ms) for `normal` outbound messages | `3500` | No |
+| `LOW_DELAY_MIN_MS` | Minimum jitter delay (ms) for `low` outbound messages | `10000` | No |
+| `LOW_DELAY_MAX_MS` | Maximum jitter delay (ms) for `low` outbound messages | `20000` | No |
 | `KEEPALIVE_INTERVAL_DAYS_MIN` | Minimum days between standby keep-alive pings | `3` | No |
 | `KEEPALIVE_INTERVAL_DAYS_MAX` | Maximum days between standby keep-alive pings | `5` | No |
 | `INBOX_QUEUE_KEY` | Redis queue key for incoming normalized messages | `whatsapp:receive:inbox` | No |
 | `OUTBOUND_QUEUE_KEY` | Redis priority queue key for outgoing messages | `whatsapp:send:priority` | No |
+| `LOW_PRIORITY_OUTBOUND_QUEUE_KEY` | Redis low-priority queue key for outgoing messages | `whatsapp:send:low` | No |
 | `FENCING_LOCK_KEY` | Distributed Redis fencing lock key | `gateway:active_engine` | No |
 | `BLPOP_TIMEOUT_SECONDS` | Blocking timeout (seconds) for outbound Redis queue | `2` | No |
 | `SHUTDOWN_TIMEOUT_MS` | Graceful shutdown timeout in milliseconds | `10000` | No |

@@ -80,7 +80,7 @@ class MockRedisClient implements IRedisClient {
   public readonly kvStore: Map<string, string>;
   public readonly listStore: Map<string, string[]>;
   public readonly waiters: Array<{
-    key: string;
+    keys: string[];
     resolve: (item: { key: string; element: string } | null) => void;
   }>;
 
@@ -88,7 +88,7 @@ class MockRedisClient implements IRedisClient {
     sharedKv?: Map<string, string>,
     sharedList?: Map<string, string[]>,
     sharedWaiters?: Array<{
-      key: string;
+      keys: string[];
       resolve: (item: { key: string; element: string } | null) => void;
     }>,
   ) {
@@ -139,7 +139,7 @@ class MockRedisClient implements IRedisClient {
     const items = Array.isArray(elements) ? elements : [elements];
 
     for (const item of items) {
-      const waiterIdx = this.waiters.findIndex((w) => w.key === key);
+      const waiterIdx = this.waiters.findIndex((w) => w.keys.includes(key));
       if (waiterIdx >= 0) {
         const waiter = this.waiters.splice(waiterIdx, 1)[0];
         if (waiter) {
@@ -168,17 +168,12 @@ class MockRedisClient implements IRedisClient {
       }
     }
 
-    if (timeoutSeconds <= 0) {
-      return null;
-    }
-
-    const targetKey = keys[0];
-    if (!targetKey) {
+    if (timeoutSeconds <= 0 || keys.length === 0) {
       return null;
     }
 
     return new Promise<{ key: string; element: string } | null>((resolve) => {
-      const waiter = { key: targetKey, resolve };
+      const waiter = { keys, resolve };
       this.waiters.push(waiter);
 
       const timer = setTimeout(() => {
@@ -312,6 +307,13 @@ describe("GatewayApplication Lifecycle Integration", () => {
       INBOX_QUEUE_KEY: "test:inbox",
       OUTBOUND_QUEUE_KEY: "test:outbound",
       BLPOP_TIMEOUT_SECONDS: "0.05",
+      ENABLE_HOST_CONNECTIVITY_GUARD: "false",
+      URGENT_DELAY_MIN_MS: "0",
+      URGENT_DELAY_MAX_MS: "0",
+      NORMAL_DELAY_MIN_MS: "0",
+      NORMAL_DELAY_MAX_MS: "0",
+      LOW_DELAY_MIN_MS: "0",
+      LOW_DELAY_MAX_MS: "0",
     });
 
     const app = new GatewayApplication({
@@ -486,6 +488,13 @@ describe("GatewayApplication Lifecycle Integration", () => {
       INBOX_QUEUE_KEY: "test:inbox",
       OUTBOUND_QUEUE_KEY: "test:outbound",
       BLPOP_TIMEOUT_SECONDS: "0.05",
+      ENABLE_HOST_CONNECTIVITY_GUARD: "false",
+      URGENT_DELAY_MIN_MS: "0",
+      URGENT_DELAY_MAX_MS: "0",
+      NORMAL_DELAY_MIN_MS: "0",
+      NORMAL_DELAY_MAX_MS: "0",
+      LOW_DELAY_MIN_MS: "0",
+      LOW_DELAY_MAX_MS: "0",
     });
 
     const app = new GatewayApplication({

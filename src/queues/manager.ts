@@ -10,9 +10,11 @@ import {
   DEFAULT_DEDUP_TTL_SECONDS,
   DEFAULT_DLQ_QUEUE,
   DEFAULT_INBOX_QUEUE,
+  DEFAULT_LOW_PRIORITY_OUTBOUND_QUEUE,
   DEFAULT_OUTBOUND_QUEUE,
   type InboundPublisherMetrics,
   type IRedisClient,
+  type OutboundDelayConfig,
   type OutboundWorkerMetrics,
 } from "./types.js";
 
@@ -22,12 +24,15 @@ export interface RedisQueueManagerOptions {
   readonly orchestrator: FailoverOrchestrator;
   readonly inboxQueueKey?: string | undefined;
   readonly outboundQueueKey?: string | undefined;
+  readonly lowPriorityOutboundQueueKey?: string | undefined;
   readonly dlqQueueKey?: string | undefined;
   readonly maxSendRetries?: number | undefined;
   readonly dedupPrefix?: string | undefined;
   readonly dedupTtlSeconds?: number | undefined;
   readonly blpopTimeoutSeconds?: number | undefined;
   readonly pauseCheckIntervalMs?: number | undefined;
+  readonly delayConfig?: Partial<OutboundDelayConfig> | undefined;
+  readonly enableTypingPresence?: boolean | undefined;
 }
 
 export interface QueueManagerStatus {
@@ -53,6 +58,7 @@ export class RedisQueueManager {
   private readonly worker: RedisOutboundWorker;
   private readonly inboxQueueKey: string;
   private readonly outboundQueueKey: string;
+  private readonly lowPriorityOutboundQueueKey: string;
   private readonly dlqQueueKey: string;
 
   private unsubscribeInbound?: (() => void) | undefined = undefined;
@@ -63,6 +69,8 @@ export class RedisQueueManager {
     this.orchestrator = options.orchestrator;
     this.inboxQueueKey = options.inboxQueueKey ?? DEFAULT_INBOX_QUEUE;
     this.outboundQueueKey = options.outboundQueueKey ?? DEFAULT_OUTBOUND_QUEUE;
+    this.lowPriorityOutboundQueueKey =
+      options.lowPriorityOutboundQueueKey ?? DEFAULT_LOW_PRIORITY_OUTBOUND_QUEUE;
     this.dlqQueueKey = options.dlqQueueKey ?? DEFAULT_DLQ_QUEUE;
 
     // INVARIANT: Redis BLPOP blocks the socket connection; dedicated client required for consumers
@@ -90,10 +98,13 @@ export class RedisQueueManager {
       client: this.blockingClient,
       orchestrator: this.orchestrator,
       outboundQueueKey: this.outboundQueueKey,
+      lowPriorityOutboundQueueKey: this.lowPriorityOutboundQueueKey,
       dlqQueueKey: this.dlqQueueKey,
       maxSendRetries: options.maxSendRetries,
       blpopTimeoutSeconds: options.blpopTimeoutSeconds ?? DEFAULT_BLPOP_TIMEOUT_SECONDS,
       pauseCheckIntervalMs: options.pauseCheckIntervalMs ?? 500,
+      delayConfig: options.delayConfig,
+      enableTypingPresence: options.enableTypingPresence,
     });
   }
 
@@ -173,30 +184,38 @@ export class RedisQueueManager {
   }
 
   /**
-   * Asynchronously inspects queue depths across inbox, outbound, and dead-letter queues.
+   * Asynchronously inspects queue depths across inbox, outbound, low-priority outbound, and dead-letter queues.
    *
    * INVARIANT: Safely falls back to zeroes if the Redis client is offline or lacks lLen method.
    */
-  async getQueueLengths(): Promise<{ inbox: number; outbound: number; dlq: number }> {
+  async getQueueLengths(): Promise<{
+    inbox: number;
+    outbound: number;
+    outboundLow: number;
+    dlq: number;
+  }> {
     let inbox = 0;
     let outbound = 0;
+    let outboundLow = 0;
     let dlq = 0;
 
     if (this.client.isOpen && typeof this.client.lLen === "function") {
       try {
-        const [inboxLen, outboundLen, dlqLen] = await Promise.all([
+        const [inboxLen, outboundLen, outboundLowLen, dlqLen] = await Promise.all([
           this.client.lLen(this.inboxQueueKey),
           this.client.lLen(this.outboundQueueKey),
+          this.client.lLen(this.lowPriorityOutboundQueueKey),
           this.client.lLen(this.dlqQueueKey),
         ]);
         inbox = inboxLen ?? 0;
         outbound = outboundLen ?? 0;
+        outboundLow = outboundLowLen ?? 0;
         dlq = dlqLen ?? 0;
       } catch {
         // Fallback to zeroes during client disconnection
       }
     }
 
-    return { inbox, outbound, dlq };
+    return { inbox, outbound, outboundLow, dlq };
   }
 }

@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { EngineName, EngineStatus, IWhatsAppDriver } from "../src/contracts/driver.js";
+import type {
+  EngineName,
+  EngineStatus,
+  IWhatsAppDriver,
+  PresenceState,
+} from "../src/contracts/driver.js";
 import type { InboundMessage, MessageReceipt, OutboundMessage } from "../src/contracts/messages.js";
 import { RedisFencingLock } from "../src/fsm/fencing.js";
 import { FailoverOrchestrator } from "../src/fsm/orchestrator.js";
@@ -17,6 +22,7 @@ class MockWhatsAppDriver implements IWhatsAppDriver {
   private statusHandlers: Array<(status: EngineStatus) => void> = [];
 
   public sentMessages: Array<{ to: string; content: OutboundMessage }> = [];
+  public sentPresences: Array<{ to: string; state: PresenceState; timestamp: number }> = [];
   public shouldFailSend = false;
 
   constructor(name: EngineName) {
@@ -52,6 +58,10 @@ class MockWhatsAppDriver implements IWhatsAppDriver {
     };
   }
 
+  async sendPresence(to: string, state: PresenceState): Promise<void> {
+    this.sentPresences.push({ to, state, timestamp: Date.now() });
+  }
+
   onMessage(handler: (msg: InboundMessage) => Promise<void>): void {
     this.messageHandlers.push(handler);
   }
@@ -83,7 +93,7 @@ class MockRedisClient implements IRedisClient {
   public readonly kvStore = new Map<string, string>();
   public readonly listStore = new Map<string, string[]>();
   public readonly waiters: Array<{
-    key: string;
+    keys: string[];
     resolve: (item: { key: string; element: string } | null) => void;
   }> = [];
 
@@ -139,7 +149,7 @@ class MockRedisClient implements IRedisClient {
 
     for (const item of items) {
       // Check if any blPop waiter is waiting for this key
-      const waiterIdx = this.waiters.findIndex((w) => w.key === key);
+      const waiterIdx = this.waiters.findIndex((w) => w.keys.includes(key));
       if (waiterIdx >= 0) {
         const waiter = this.waiters.splice(waiterIdx, 1)[0];
         if (waiter) {
@@ -168,17 +178,12 @@ class MockRedisClient implements IRedisClient {
       }
     }
 
-    if (timeoutSeconds <= 0) {
-      return null;
-    }
-
-    const targetKey = keys[0];
-    if (!targetKey) {
+    if (timeoutSeconds <= 0 || keys.length === 0) {
       return null;
     }
 
     return new Promise<{ key: string; element: string } | null>((resolve) => {
-      const waiter = { key: targetKey, resolve };
+      const waiter = { keys, resolve };
       this.waiters.push(waiter);
 
       const timer = setTimeout(() => {
@@ -730,6 +735,218 @@ describe("RedisOutboundWorker & Failover Backpressure", () => {
     const requeuedItem = JSON.parse(String(requeuedList[0]));
     expect(requeuedItem.retryCount).toBe(1);
     expect(requeuedItem.lastError).toContain("FailoverOrchestrator is shutting down");
+  });
+
+  it("drains priority queue (whatsapp:send:priority) strictly before low-priority queue (whatsapp:send:low)", async () => {
+    const primaryDriver = new MockWhatsAppDriver("baileys");
+    const standbyDriver = new MockWhatsAppDriver("wwebjs");
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver,
+      standbyDriver,
+      disableBackgroundProbeTimer: true,
+    });
+    await orchestrator.start();
+
+    const client = new MockRedisClient();
+
+    // Enqueue 2 low-priority items first, then 2 priority items before starting worker
+    await client.lPush(
+      "whatsapp:send:low",
+      JSON.stringify({ phone_number: "5511999990001@c.us", content: "Low 1" }),
+    );
+    await client.lPush(
+      "whatsapp:send:low",
+      JSON.stringify({ phone_number: "5511999990002@c.us", content: "Low 2" }),
+    );
+    await client.lPush(
+      "whatsapp:send:priority",
+      JSON.stringify({ phone_number: "5511999990003@c.us", content: "Priority 1" }),
+    );
+    await client.lPush(
+      "whatsapp:send:priority",
+      JSON.stringify({ phone_number: "5511999990004@c.us", content: "Priority 2" }),
+    );
+
+    const worker = new RedisOutboundWorker({
+      client,
+      orchestrator,
+      outboundQueueKey: "whatsapp:send:priority",
+      lowPriorityOutboundQueueKey: "whatsapp:send:low",
+      blpopTimeoutSeconds: 0.05,
+    });
+
+    worker.start();
+
+    await vi.waitFor(
+      () => {
+        expect(primaryDriver.sentMessages).toHaveLength(4);
+      },
+      { timeout: 1500, interval: 20 },
+    );
+
+    const sentTexts = primaryDriver.sentMessages.map((m) => m.content.text);
+    expect(sentTexts).toEqual(["Priority 1", "Priority 2", "Low 1", "Low 2"]);
+
+    await worker.stop();
+    await orchestrator.shutdown();
+  });
+
+  it("enforces randomized jitter delays per priority tier (urgent, normal, low) and dispatches composing presence", async () => {
+    const primaryDriver = new MockWhatsAppDriver("baileys");
+    const standbyDriver = new MockWhatsAppDriver("wwebjs");
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver,
+      standbyDriver,
+      disableBackgroundProbeTimer: true,
+    });
+    await orchestrator.start();
+
+    const client = new MockRedisClient();
+    const worker = new RedisOutboundWorker({
+      client,
+      orchestrator,
+      outboundQueueKey: "whatsapp:send:priority",
+      lowPriorityOutboundQueueKey: "whatsapp:send:low",
+      blpopTimeoutSeconds: 0.05,
+      enableTypingPresence: true,
+      delayConfig: {
+        urgent: { minMs: 30, maxMs: 50 },
+        normal: { minMs: 70, maxMs: 100 },
+        low: { minMs: 130, maxMs: 160 },
+      },
+    });
+
+    worker.start();
+
+    // 1. Urgent priority message
+    const startUrgent = Date.now();
+    await client.lPush(
+      "whatsapp:send:priority",
+      JSON.stringify({
+        phone_number: "5511999991111@c.us",
+        content: "Urgent message",
+        priority: "urgent",
+      }),
+    );
+
+    await vi.waitFor(
+      () => {
+        expect(primaryDriver.sentMessages).toHaveLength(1);
+      },
+      { timeout: 1000, interval: 10 },
+    );
+    const urgentElapsed = Date.now() - startUrgent;
+    expect(urgentElapsed).toBeGreaterThanOrEqual(25);
+    expect(primaryDriver.sentPresences).toHaveLength(1);
+    expect(primaryDriver.sentPresences[0]?.state).toBe("composing");
+    expect(primaryDriver.sentPresences[0]?.to).toBe("5511999991111@c.us");
+
+    // 2. Normal priority message (default on priority queue)
+    const startNormal = Date.now();
+    await client.lPush(
+      "whatsapp:send:priority",
+      JSON.stringify({
+        phone_number: "5511999992222@c.us",
+        content: "Normal message",
+      }),
+    );
+
+    await vi.waitFor(
+      () => {
+        expect(primaryDriver.sentMessages).toHaveLength(2);
+      },
+      { timeout: 1000, interval: 10 },
+    );
+    const normalElapsed = Date.now() - startNormal;
+    expect(normalElapsed).toBeGreaterThanOrEqual(65);
+    expect(primaryDriver.sentPresences).toHaveLength(2);
+    expect(primaryDriver.sentPresences[1]?.to).toBe("5511999992222@c.us");
+
+    // 3. Low priority message (via whatsapp:send:low queue)
+    const startLow = Date.now();
+    await client.lPush(
+      "whatsapp:send:low",
+      JSON.stringify({
+        phone_number: "5511999993333@c.us",
+        content: "Low priority newsletter",
+      }),
+    );
+
+    await vi.waitFor(
+      () => {
+        expect(primaryDriver.sentMessages).toHaveLength(3);
+      },
+      { timeout: 1000, interval: 10 },
+    );
+    const lowElapsed = Date.now() - startLow;
+    expect(lowElapsed).toBeGreaterThanOrEqual(120);
+    expect(primaryDriver.sentPresences).toHaveLength(3);
+    expect(primaryDriver.sentPresences[2]?.to).toBe("5511999993333@c.us");
+
+    await worker.stop();
+    await orchestrator.shutdown();
+  });
+
+  it("re-queues transient failures from low-priority queue back to whatsapp:send:low", async () => {
+    const primaryDriver = new MockWhatsAppDriver("baileys");
+    const standbyDriver = new MockWhatsAppDriver("wwebjs");
+    let attempts = 0;
+    primaryDriver.sendMessage = vi.fn().mockImplementation(async (to, content) => {
+      attempts++;
+      if (attempts === 1) {
+        throw new Error("Transient low-priority send error");
+      }
+      primaryDriver.sentMessages.push({ to, content });
+      return {
+        id: `rcpt_${Date.now()}`,
+        to,
+        timestamp: Date.now(),
+        status: "SENT",
+      };
+    });
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver,
+      standbyDriver,
+      disableBackgroundProbeTimer: true,
+      circuitBreakerOptions: { failureThreshold: 10 },
+    });
+    await orchestrator.start();
+
+    const client = new MockRedisClient();
+    const worker = new RedisOutboundWorker({
+      client,
+      orchestrator,
+      outboundQueueKey: "whatsapp:send:priority",
+      lowPriorityOutboundQueueKey: "whatsapp:send:low",
+      maxSendRetries: 3,
+      blpopTimeoutSeconds: 0.05,
+    });
+
+    worker.start();
+
+    await client.lPush(
+      "whatsapp:send:low",
+      JSON.stringify({
+        phone_number: "5511999994444@c.us",
+        content: "Retry in low queue",
+      }),
+    );
+
+    await vi.waitFor(
+      () => {
+        expect(primaryDriver.sentMessages).toHaveLength(1);
+      },
+      { timeout: 1500, interval: 20 },
+    );
+
+    expect(worker.getMetrics().requeuedCount).toBe(1);
+    expect(worker.getMetrics().processedCount).toBe(1);
+    expect(client.listStore.get("whatsapp:send:priority") ?? []).toHaveLength(0);
+    expect(client.listStore.get("whatsapp:send:low") ?? []).toHaveLength(0);
+
+    await worker.stop();
+    await orchestrator.shutdown();
   });
 });
 

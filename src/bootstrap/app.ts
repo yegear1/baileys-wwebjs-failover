@@ -112,9 +112,25 @@ export class GatewayApplication {
       orchestrator: this.orchestrator,
       inboxQueueKey: this.config.inboxQueueKey,
       outboundQueueKey: this.config.outboundQueueKey,
+      lowPriorityOutboundQueueKey: this.config.lowPriorityOutboundQueueKey,
       dlqQueueKey: this.config.dlqQueueKey,
       maxSendRetries: this.config.maxSendRetries,
       blpopTimeoutSeconds: this.config.blpopTimeoutSeconds,
+      enableTypingPresence: this.config.enableTypingPresence,
+      delayConfig: {
+        urgent: {
+          minMs: this.config.urgentDelayMinMs,
+          maxMs: this.config.urgentDelayMaxMs,
+        },
+        normal: {
+          minMs: this.config.normalDelayMinMs,
+          maxMs: this.config.normalDelayMaxMs,
+        },
+        low: {
+          minMs: this.config.lowDelayMinMs,
+          maxMs: this.config.lowDelayMaxMs,
+        },
+      },
     });
 
     this.maintenanceDaemon = new StandbyMaintenanceDaemon({

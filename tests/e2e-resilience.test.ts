@@ -146,6 +146,13 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
       INBOX_QUEUE_KEY: inboxKey,
       OUTBOUND_QUEUE_KEY: outboundKey,
       FENCING_LOCK_KEY: fencingKey,
+      ENABLE_HOST_CONNECTIVITY_GUARD: "false",
+      URGENT_DELAY_MIN_MS: "0",
+      URGENT_DELAY_MAX_MS: "0",
+      NORMAL_DELAY_MIN_MS: "0",
+      NORMAL_DELAY_MAX_MS: "0",
+      LOW_DELAY_MIN_MS: "0",
+      LOW_DELAY_MAX_MS: "0",
     });
 
     const redisClient = await redisEnv.createClient();
@@ -295,6 +302,12 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
       OUTBOUND_QUEUE_KEY: outboundKey,
       FENCING_LOCK_KEY: fencingKey,
       ENABLE_HOST_CONNECTIVITY_GUARD: "false",
+      URGENT_DELAY_MIN_MS: "0",
+      URGENT_DELAY_MAX_MS: "0",
+      NORMAL_DELAY_MIN_MS: "0",
+      NORMAL_DELAY_MAX_MS: "0",
+      LOW_DELAY_MIN_MS: "0",
+      LOW_DELAY_MAX_MS: "0",
     });
 
     const redisClient = await redisEnv.createClient();
@@ -382,6 +395,13 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
       INBOX_QUEUE_KEY: inboxKey,
       OUTBOUND_QUEUE_KEY: outboundKey,
       FENCING_LOCK_KEY: fencingKey,
+      ENABLE_HOST_CONNECTIVITY_GUARD: "false",
+      URGENT_DELAY_MIN_MS: "0",
+      URGENT_DELAY_MAX_MS: "0",
+      NORMAL_DELAY_MIN_MS: "0",
+      NORMAL_DELAY_MAX_MS: "0",
+      LOW_DELAY_MIN_MS: "0",
+      LOW_DELAY_MAX_MS: "0",
     });
 
     const redisClient = await redisEnv.createClient();
@@ -477,6 +497,12 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
       MAX_SEND_RETRIES: "3",
       BLPOP_TIMEOUT_SECONDS: "0.1",
       FAILOVER_ERROR_THRESHOLD: "10",
+      URGENT_DELAY_MIN_MS: "0",
+      URGENT_DELAY_MAX_MS: "0",
+      NORMAL_DELAY_MIN_MS: "0",
+      NORMAL_DELAY_MAX_MS: "0",
+      LOW_DELAY_MIN_MS: "0",
+      LOW_DELAY_MAX_MS: "0",
     });
 
     const redisClient = await redisEnv.createClient();
@@ -522,6 +548,82 @@ describe("E2E Smoke & Resilience Verification (Real Redis)", () => {
         expect(parsed.dlqReason).toContain("Max send retries (3) exceeded");
         expect(parsed.to).toBe("5511999998888@c.us");
       }
+    } finally {
+      await directClient.quit?.();
+      await app.stop();
+    }
+  });
+
+  it("processes multi-tier priority and low-priority queues with jitter delays in real Redis", async () => {
+    const testId = `multitier_${Date.now()}`;
+    const inboxKey = `whatsapp:receive:inbox:${testId}`;
+    const outboundKey = `whatsapp:send:priority:${testId}`;
+    const lowOutboundKey = `whatsapp:send:low:${testId}`;
+    const dlqKey = `whatsapp:send:dlq:${testId}`;
+    const fencingKey = `gateway:active_engine:${testId}`;
+
+    const primaryDriver = new ControllableMockDriver("baileys");
+    const standbyDriver = new ControllableMockDriver("wwebjs");
+
+    const config = loadGatewayConfig({
+      PORT: "0",
+      REDIS_URL: redisEnv.url,
+      AUTH_DIR_BAILEYS: authBaileys,
+      AUTH_DIR_WWEBJS: authWWebJS,
+      INBOX_QUEUE_KEY: inboxKey,
+      OUTBOUND_QUEUE_KEY: outboundKey,
+      LOW_PRIORITY_OUTBOUND_QUEUE_KEY: lowOutboundKey,
+      DLQ_QUEUE_KEY: dlqKey,
+      FENCING_LOCK_KEY: fencingKey,
+      BLPOP_TIMEOUT_SECONDS: "0.05",
+      URGENT_DELAY_MIN_MS: "10",
+      URGENT_DELAY_MAX_MS: "20",
+      NORMAL_DELAY_MIN_MS: "30",
+      NORMAL_DELAY_MAX_MS: "40",
+      LOW_DELAY_MIN_MS: "60",
+      LOW_DELAY_MAX_MS: "80",
+      ENABLE_TYPING_PRESENCE: "true",
+    });
+
+    const directClient = await redisEnv.createClient();
+
+    // Pre-populate low-priority queue and priority queue before app start
+    await directClient.lPush(
+      lowOutboundKey,
+      JSON.stringify({ phone_number: "5511999990001", content: "Low priority item" }),
+    );
+    await directClient.lPush(
+      outboundKey,
+      JSON.stringify({
+        phone_number: "5511999990002",
+        content: "Urgent priority item",
+        priority: "urgent",
+      }),
+    );
+
+    const redisClient = await redisEnv.createClient();
+    const blockingRedisClient = await redisEnv.createClient();
+    const app = new GatewayApplication({
+      config,
+      primaryDriver,
+      standbyDriver,
+      redisClient,
+      blockingRedisClient,
+      disableBackgroundProbeTimer: true,
+    });
+
+    await app.start();
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(primaryDriver.sentMessages.length).toBe(2);
+        },
+        { timeout: 2500, interval: 25 },
+      );
+
+      expect(primaryDriver.sentMessages[0]?.content.text).toBe("Urgent priority item");
+      expect(primaryDriver.sentMessages[1]?.content.text).toBe("Low priority item");
     } finally {
       await directClient.quit?.();
       await app.stop();

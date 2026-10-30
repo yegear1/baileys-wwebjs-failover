@@ -179,14 +179,22 @@ describe("Gateway Soak & Long-Running Memory Leak Audit", () => {
           FAILOVER_ERROR_THRESHOLD: "2",
           PROBE_INTERVAL_MS: "500",
           ENABLE_HOST_CONNECTIVITY_GUARD: "false",
+          URGENT_DELAY_MIN_MS: "0",
+          URGENT_DELAY_MAX_MS: "0",
+          NORMAL_DELAY_MIN_MS: "0",
+          NORMAL_DELAY_MAX_MS: "0",
+          LOW_DELAY_MIN_MS: "0",
+          LOW_DELAY_MAX_MS: "0",
         });
 
+        const appClient = await redisEnv.createClient();
+        const appBlockingClient = await redisEnv.createClient();
         const app = new GatewayApplication({
           config,
           primaryDriver,
           standbyDriver,
-          redisClient: testClient,
-          blockingRedisClient: testClient,
+          redisClient: appClient,
+          blockingRedisClient: appBlockingClient,
           disableBackgroundProbeTimer: true,
           enableHostConnectivityGuard: false,
         });
@@ -275,8 +283,11 @@ describe("Gateway Soak & Long-Running Memory Leak Audit", () => {
       const inboxKey = "soak:dedup:inbox";
       const outboundKey = "soak:dedup:outbound";
 
+      const qmClient = await redisEnv.createClient();
+      const qmBlockingClient = await redisEnv.createClient();
       const queueManager = new RedisQueueManager({
-        client: testClient,
+        client: qmClient,
+        blockingClient: qmBlockingClient,
         orchestrator,
         inboxQueueKey: inboxKey,
         outboundQueueKey: outboundKey,
@@ -563,12 +574,14 @@ describe("Gateway Soak & Long-Running Memory Leak Audit", () => {
         BLPOP_TIMEOUT_SECONDS: "0.05",
       });
 
+      const appClient = await redisEnv.createClient();
+      const appBlockingClient = await redisEnv.createClient();
       const app = new GatewayApplication({
         config,
         primaryDriver,
         standbyDriver,
-        redisClient: testClient,
-        blockingRedisClient: testClient,
+        redisClient: appClient,
+        blockingRedisClient: appBlockingClient,
       });
 
       app.setupSignalHandlers();

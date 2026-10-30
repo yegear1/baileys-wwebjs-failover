@@ -144,7 +144,7 @@ export class MetricsService {
 
   private async appendQueueMetrics(lines: string[]): Promise<void> {
     const queueStatus = this.queueManager?.getStatus();
-    let queueLengths = { inbox: 0, outbound: 0, dlq: 0 };
+    let queueLengths = { inbox: 0, outbound: 0, outboundLow: 0, dlq: 0 };
 
     if (this.queueManager && typeof this.queueManager.getQueueLengths === "function") {
       queueLengths = await this.queueManager.getQueueLengths();
@@ -156,6 +156,7 @@ export class MetricsService {
     lines.push("# TYPE queue_length gauge");
     lines.push(`queue_length{queue="inbox"} ${queueLengths.inbox}`);
     lines.push(`queue_length{queue="outbound"} ${queueLengths.outbound}`);
+    lines.push(`queue_length{queue="outbound_low"} ${queueLengths.outboundLow ?? 0}`);
     lines.push(`queue_length{queue="dlq"} ${queueLengths.dlq}`);
 
     const dlqTotal = queueStatus?.worker.dlqCount ?? 0;
