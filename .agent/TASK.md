@@ -50,7 +50,7 @@
 | [90.7] | End-to-End Load & Sustained Queue Concurrency Verification | [`184a6ed`] | 2026-10-29 |
 | [90.8] | Soak Test & Long-Running Memory Leak Audit | [`59739d7`] | 2026-10-29 |
 | [04.1] | Multi-Tier Outbound Queue, Priority Jitter Delays & Typing Presence | [`687006a`] | 2026-10-30 |
-| [04.2] | Automated Session Purge & QR Regeneration on Companion Logout | [`a24c0c7`] | 2026-10-30 |
+| [04.2] | Automated Session Purge & QR Regeneration on Companion Logout | [`0e09b8e`] | 2026-10-30 |
 
 ---
 
