@@ -7,20 +7,10 @@
 
 ## Active Task
 
-### [04.3] VictoriaLogs Canonical NDJSON Logging & Docker Hygiene
+### [04.4] Next Feature / Hardening Milestone (Awaiting User Scope)
 
-**Status:** `PLANNING`
-**Objective:** Align the gateway's `pino` logger, Docker Compose runtime environment, and documentation perimeter with the `victorialogs-integration` canonical NDJSON contract (`timestamp` ISO-8601 UTC, lowercase `level`, `service`, `app`, `env`, `message` root key, and `NO_COLOR=1`).
-
-**Implementation Plan:**
-1. **Canonical VictoriaLogs Pino Formatter ([src/index.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/src/index.ts)):**
-   - Implement `createGatewayLogger(options?)` and configure `logger` with `messageKey: "message"`, lowercase string `level` formatter (`formatters: { level: (label) => ({ level: label }) }`), ISO-8601 UTC `timestamp` (`timestamp: () => \`,"timestamp":"\${new Date().toISOString()}"\``), and canonical `base` stream fields (`service: process.env.SERVICE_NAME || "baileys-wwebjs-failover"`, `app: process.env.SERVICE_NAME || "baileys-wwebjs-failover"`, `env: process.env.NODE_ENV === "development" ? "development" : "production"`).
-2. **Docker Compose & Environment Hygiene ([docker-compose.yml](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/docker-compose.yml), [.env.example](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/.env.example)):**
-   - Add `SERVICE_NAME: ${SERVICE_NAME:-baileys-wwebjs-failover}`, `LOG_LEVEL: ${LOG_LEVEL:-info}`, and `NO_COLOR: "1"` to `docker-compose.yml` and `.env.example`.
-3. **Documentation Perimeter ([README.md](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/README.md), [README.pt-br.md](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/README.pt-br.md), [.agent/NOTES.md](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/.agent/NOTES.md)):**
-   - Synchronize new environment variables (`SERVICE_NAME`, `LOG_LEVEL`, `NO_COLOR`, and multi-tier outbound delay variables) across `README.md` and `README.pt-br.md` following `readme-standard`.
-4. **Verification ([tests/smoke.test.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/tests/smoke.test.ts)):**
-   - Add unit tests verifying that `createGatewayLogger` emits single-line NDJSON containing `timestamp` (ISO-8601 UTC), lowercase `level`, `service`, `app`, `env`, and root `message` fields.
+**Status:** `READY FOR PLANNING`
+**Objective:** All tasks in Epic `04.x` (`[04.1]` Multi-Tier Outbound Queue & Typing Presence, `[04.2]` Automated Session Purge & QR Regeneration on Companion Logout, and `[04.3]` VictoriaLogs Canonical NDJSON Logging & Docker Hygiene) are complete and verified. Awaiting user scope for the next feature or explicit release instruction.
 
 ---
 
@@ -51,6 +41,7 @@
 | [90.8] | Soak Test & Long-Running Memory Leak Audit | [`59739d7`] | 2026-10-29 |
 | [04.1] | Multi-Tier Outbound Queue, Priority Jitter Delays & Typing Presence | [`687006a`] | 2026-10-30 |
 | [04.2] | Automated Session Purge & QR Regeneration on Companion Logout | [`0e09b8e`] | 2026-10-30 |
+| [04.3] | VictoriaLogs Canonical NDJSON Logging & Docker Hygiene | [`3f1973b`] | 2026-10-30 |
 
 ---
 
