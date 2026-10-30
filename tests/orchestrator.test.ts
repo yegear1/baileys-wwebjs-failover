@@ -665,4 +665,78 @@ describe("FailoverOrchestrator", () => {
 
     await orchestrator.shutdown();
   });
+
+  it("immediately fails over to standby when primary companion transitions to UNPAIRED (401 logout)", async () => {
+    const primary = new MockWhatsAppDriver("baileys");
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver: primary,
+      standbyDriver: standby,
+      circuitBreakerOptions: { failureThreshold: 5 }, // High threshold to prove immediate bypass on UNPAIRED
+      disableBackgroundProbeTimer: true,
+    });
+
+    await orchestrator.start();
+    expect(orchestrator.getState()).toBe("PRIMARY_ACTIVE");
+
+    // Simulate single explicit companion logout (UNPAIRED)
+    primary.simulateStatusChange({
+      engine: "baileys",
+      state: "UNPAIRED",
+      connected: false,
+      error: "Connection logged out (401)",
+    });
+
+    await vi.waitFor(() => {
+      expect(orchestrator.getState()).toBe("FALLBACK_ACTIVE");
+    });
+
+    expect(orchestrator.getActiveEngine()).toBe("wwebjs");
+    expect(standby.connectCalls).toBe(1);
+    expect(orchestrator.getSnapshot().lastError).toBe("Connection logged out (401)");
+
+    await orchestrator.shutdown();
+  });
+
+  it("preserves primary PAIRING_QR_READY socket during silent probe so operator can scan regenerated QR", async () => {
+    const primary = new MockWhatsAppDriver("baileys");
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver: primary,
+      standbyDriver: standby,
+      disableBackgroundProbeTimer: true,
+      probeTimeoutMs: 50,
+    });
+
+    await orchestrator.start();
+    await orchestrator.triggerFailover("Primary companion logged out");
+    expect(orchestrator.getState()).toBe("FALLBACK_ACTIVE");
+
+    const disconnectCallsAfterFencing = primary.disconnectCalls;
+
+    // When silent probe calls connect() on purged primary, it transitions to PAIRING_QR_READY
+    primary.connect = vi.fn().mockImplementation(async () => {
+      primary.simulateStatusChange({
+        engine: "baileys",
+        state: "PAIRING_QR_READY",
+        connected: false,
+      });
+    });
+
+    const probe1 = await orchestrator.executeSilentProbe();
+    expect(probe1).toBe(false);
+    // Socket must NOT be disconnected when awaiting QR scan
+    expect(primary.disconnectCalls).toBe(disconnectCallsAfterFencing);
+    expect(primary.getStatus().state).toBe("PAIRING_QR_READY");
+
+    // Subsequent probe while still in PAIRING_QR_READY returns false without calling connect() or disconnect()
+    const probe2 = await orchestrator.executeSilentProbe();
+    expect(probe2).toBe(false);
+    expect(primary.connect).toHaveBeenCalledTimes(1);
+    expect(primary.disconnectCalls).toBe(disconnectCallsAfterFencing);
+
+    await orchestrator.shutdown();
+  });
 });

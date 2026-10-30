@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -370,26 +370,50 @@ describe("WWebJSDriver Lifecycle & Event Wiring", () => {
     }
   });
 
-  it("handles auth_failure and disconnected events", async () => {
+  it("handles auth_failure and disconnected events and purges invalidated LocalAuth profile data", async () => {
+    const tempParent = mkdtempSync(join(tmpdir(), "wwebjs-logout-purge-"));
+    const authDir = join(tempParent, "auth");
     const mockClient = new MockWWebJSClient();
     mockClient.autoEmitReady = false;
-    const { driver, cleanup } = createTestDriver({ mockClient, awaitReady: false });
+
+    const driver = new WWebJSDriver({
+      authDir,
+      clientFactory: () => mockClient,
+      awaitReady: false,
+    });
 
     try {
       await driver.connect();
 
-      // Auth failure
+      // Populate simulated LocalAuth profile directory & files inside authDir
+      const sessionDir = join(authDir, "session", "Default");
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(join(sessionDir, "Cookies"), "stale-cookie-db");
+      writeFileSync(join(authDir, "SingletonLock"), "stale-lock");
+      expect(readdirSync(authDir).length).toBeGreaterThan(0);
+
+      // Auth failure purges profile and transitions to UNPAIRED
       mockClient.emit("auth_failure", "Session invalid");
       expect(driver.getStatus().state).toBe("UNPAIRED");
       expect(driver.getStatus().connected).toBe(false);
       expect(driver.getStatus().error).toBe("Session invalid");
+      expect(readdirSync(authDir)).toEqual([]);
 
-      // Disconnected with LOGOUT
+      // Repopulate and test disconnected with LOGOUT
+      mkdirSync(sessionDir, { recursive: true });
+      writeFileSync(join(sessionDir, "Local State"), "{}");
+      expect(readdirSync(authDir).length).toBe(1);
+
       mockClient.emit("disconnected", "LOGOUT");
       expect(driver.getStatus().state).toBe("UNPAIRED");
+      expect(readdirSync(authDir)).toEqual([]);
+
+      await vi.waitFor(() => {
+        expect(mockClient.destroyMock).toHaveBeenCalled();
+      });
     } finally {
       await driver.disconnect();
-      cleanup();
+      rmSync(tempParent, { recursive: true, force: true });
     }
   });
 

@@ -400,6 +400,12 @@ export class FailoverOrchestrator {
         return true;
       }
 
+      // INVARIANT: If primary is already awaiting a human QR scan (PAIRING_QR_READY), preserve
+      // the active QR pairing socket instead of tearing it down and rotating the QR token.
+      if (currentStatus.state === "PAIRING_QR_READY") {
+        return false;
+      }
+
       // If disconnected, await connection completion (CONNECTED state) with deterministic timeout
       const connectPromise = this.primary.connect();
       const connected = await this.waitForPrimaryConnected(connectPromise);
@@ -417,9 +423,12 @@ export class FailoverOrchestrator {
         return true;
       }
 
-      // Probe failed or timed out: safely teardown probe sockets to prevent leaks
+      // Probe failed or timed out: safely teardown probe sockets to prevent leaks,
+      // unless primary transitioned to PAIRING_QR_READY awaiting operator QR scan.
       this.circuitBreaker.recordFailure("Primary status not connected during probe");
-      await this.disconnectPrimarySafely();
+      if (this.primary.getStatus().state !== "PAIRING_QR_READY") {
+        await this.disconnectPrimarySafely();
+      }
       return false;
     } catch (error) {
       this.circuitBreaker.recordFailure(error);
@@ -457,7 +466,11 @@ export class FailoverOrchestrator {
       const onStatus = (status: EngineStatus) => {
         if (status.connected) {
           finish(true);
-        } else if (status.state === "ERROR" || status.state === "UNPAIRED") {
+        } else if (
+          status.state === "ERROR" ||
+          status.state === "UNPAIRED" ||
+          status.state === "PAIRING_QR_READY"
+        ) {
           finish(false);
         }
       };
@@ -531,14 +544,24 @@ export class FailoverOrchestrator {
         }
       }
 
-      if (
-        this.state === "PRIMARY_ACTIVE" &&
-        (status.state === "ERROR" || status.state === "DISCONNECTED")
-      ) {
-        const tripped = this.circuitBreaker.recordFailure(status.error ?? "Primary socket dropped");
-        if (tripped) {
-          logger.warn({ status }, "Circuit breaker tripped due to primary driver status change");
-          void this.triggerFailover("Primary socket degraded/disconnected");
+      if (this.state === "PRIMARY_ACTIVE") {
+        if (status.state === "UNPAIRED") {
+          // INVARIANT: Explicit companion logout (401 / UNPAIRED) is permanent until re-paired;
+          // immediately trip the circuit breaker and fail over without waiting for error thresholds.
+          this.lastError = status.error ?? "Primary companion device logged out / unpaired";
+          logger.warn(
+            { status },
+            "Primary companion device logged out (UNPAIRED); triggering immediate failover",
+          );
+          void this.triggerFailover("Primary companion device logged out / unpaired");
+        } else if (status.state === "ERROR" || status.state === "DISCONNECTED") {
+          const tripped = this.circuitBreaker.recordFailure(
+            status.error ?? "Primary socket dropped",
+          );
+          if (tripped) {
+            logger.warn({ status }, "Circuit breaker tripped due to primary driver status change");
+            void this.triggerFailover("Primary socket degraded/disconnected");
+          }
         }
       }
     });

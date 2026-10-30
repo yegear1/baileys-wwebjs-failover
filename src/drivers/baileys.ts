@@ -11,7 +11,7 @@ import type { Logger } from "pino";
 import type { EngineStatus, IWhatsAppDriver, PresenceState } from "../contracts/driver.js";
 import type { InboundMessage, MessageReceipt, OutboundMessage } from "../contracts/messages.js";
 import { logger as defaultLogger } from "../index.js";
-import { ensureSecureAuthDirectory } from "./auth-utils.js";
+import { ensureSecureAuthDirectory, purgeAuthDirectory } from "./auth-utils.js";
 import { mapBaileysMessageToInbound, mapOutboundToBaileysContent } from "./baileys-mapper.js";
 
 export interface BaileysDriverOptions {
@@ -28,6 +28,12 @@ export interface BaileysDriverOptions {
    * Default: true.
    */
   readonly autoReconnect?: boolean;
+  /**
+   * Whether to automatically purge invalidated auth credentials and re-initialize a fresh
+   * pairing QR session when the companion device is explicitly logged out (401).
+   * Default: true.
+   */
+  readonly autoPurgeOnLogout?: boolean;
   /**
    * Maximum consecutive reconnect attempts before transitioning to ERROR.
    * Default: 5.
@@ -76,6 +82,7 @@ export class BaileysDriver implements IWhatsAppDriver {
   ) => Promise<{ state: AuthenticationState; saveCreds: () => Promise<void> }>;
   private readonly sendMessageTimeoutMs: number;
   private readonly autoReconnect: boolean;
+  private readonly autoPurgeOnLogout: boolean;
   private readonly reconnectMaxAttempts: number;
   private readonly reconnectInitialDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
@@ -106,6 +113,7 @@ export class BaileysDriver implements IWhatsAppDriver {
         ? Number.parseInt(process.env.SEND_MESSAGE_TIMEOUT_MS, 10)
         : 15000);
     this.autoReconnect = options.autoReconnect ?? true;
+    this.autoPurgeOnLogout = options.autoPurgeOnLogout ?? true;
     this.reconnectMaxAttempts = options.reconnectMaxAttempts ?? 5;
     this.reconnectInitialDelayMs = options.reconnectInitialDelayMs ?? 1000;
     this.reconnectMaxDelayMs = options.reconnectMaxDelayMs ?? 30000;
@@ -294,6 +302,18 @@ export class BaileysDriver implements IWhatsAppDriver {
     const isLoggedOut = statusCode === DisconnectReason.loggedOut;
     const errorMessage = error instanceof Error ? error.message : undefined;
 
+    if (isLoggedOut && this.autoPurgeOnLogout) {
+      this.logger.warn(
+        { authDir: this.authDir, statusCode },
+        "Baileys companion device logged out (401); purging invalidated auth state",
+      );
+      try {
+        purgeAuthDirectory(this.authDir);
+      } catch (purgeErr) {
+        this.logger.error({ purgeErr, authDir: this.authDir }, "Failed to purge Baileys authDir");
+      }
+    }
+
     this.updateStatus({
       engine: "baileys",
       state: isLoggedOut ? "UNPAIRED" : "DISCONNECTED",
@@ -301,13 +321,40 @@ export class BaileysDriver implements IWhatsAppDriver {
       ...(errorMessage !== undefined ? { error: errorMessage } : {}),
     });
 
-    // INVARIANT: Do not reconnect if unlinked/logged out, if explicitly disconnected by caller,
-    // or if autoReconnect is disabled.
-    if (this.isIntentionalDisconnect || isLoggedOut || !this.autoReconnect) {
+    if (this.isIntentionalDisconnect || !this.autoReconnect) {
+      return;
+    }
+
+    if (isLoggedOut) {
+      if (this.autoPurgeOnLogout) {
+        this.scheduleLogoutQrRegeneration();
+      }
       return;
     }
 
     this.scheduleReconnect(statusCode, errorMessage);
+  }
+
+  private scheduleLogoutQrRegeneration(): void {
+    this.clearReconnectTimer();
+    this.reconnectAttempt = 0;
+
+    // INVARIANT: Defer QR session re-initialization so synchronous status listeners
+    // (including FailoverOrchestrator) observe the UNPAIRED transition first, and explicit
+    // disconnect() calls can cancel the pending re-initialization cleanly.
+    this.reconnectTimer = setTimeout(async () => {
+      if (this.isIntentionalDisconnect) return;
+      try {
+        this.logger.info(
+          { authDir: this.authDir },
+          "Re-initializing Baileys socket after companion logout to generate fresh pairing QR",
+        );
+        await this.connect();
+      } catch (err) {
+        this.logger.warn({ err }, "Failed to re-initialize Baileys QR session after logout");
+      }
+    }, this.reconnectInitialDelayMs);
+    this.reconnectTimer.unref?.();
   }
 
   private scheduleReconnect(statusCode?: number, errorMessage?: string): void {

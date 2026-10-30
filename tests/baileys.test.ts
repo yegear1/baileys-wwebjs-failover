@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -14,6 +14,7 @@ import {
   ensureSecureAuthDirectory,
   mapBaileysMessageToInbound,
   mapOutboundToBaileysContent,
+  purgeAuthDirectory,
 } from "../src/index.js";
 
 class MockSocketEventEmitter extends EventEmitter {
@@ -48,7 +49,7 @@ function createMockSocket(): {
   return { sock, ev, sendMessageMock, sendPresenceUpdateMock, endMock };
 }
 
-describe("ensureSecureAuthDirectory", () => {
+describe("ensureSecureAuthDirectory & purgeAuthDirectory", () => {
   it("creates directory and enforces 0700 permissions", () => {
     const tempParent = mkdtempSync(join(tmpdir(), "auth-test-"));
     const authPath = join(tempParent, "baileys-test");
@@ -60,6 +61,35 @@ describe("ensureSecureAuthDirectory", () => {
       // POSIX mode check (rwx------)
       if (process.platform !== "win32") {
         expect(stats.mode & 0o777).toBe(0o700);
+      }
+    } finally {
+      rmSync(tempParent, { recursive: true, force: true });
+    }
+  });
+
+  it("purges stale files and subdirectories while preserving mount root and 0700 permissions", () => {
+    const tempParent = mkdtempSync(join(tmpdir(), "auth-purge-test-"));
+    const authPath = join(tempParent, "baileys-mount");
+
+    try {
+      ensureSecureAuthDirectory(authPath);
+      const rootInodeBefore = statSync(authPath).ino;
+
+      writeFileSync(join(authPath, "creds.json"), '{"noiseKey":"stale"}');
+      writeFileSync(join(authPath, "app-state-sync-key-1.json"), "{}");
+      mkdirSync(join(authPath, "nested-session"), { recursive: true });
+      writeFileSync(join(authPath, "nested-session", "pre-key-1.json"), "{}");
+
+      expect(readdirSync(authPath).length).toBe(3);
+
+      purgeAuthDirectory(authPath);
+
+      const statsAfter = statSync(authPath);
+      expect(statsAfter.isDirectory()).toBe(true);
+      expect(statsAfter.ino).toBe(rootInodeBefore);
+      expect(readdirSync(authPath)).toEqual([]);
+      if (process.platform !== "win32") {
+        expect(statsAfter.mode & 0o777).toBe(0o700);
       }
     } finally {
       rmSync(tempParent, { recursive: true, force: true });
@@ -381,37 +411,58 @@ describe("BaileysDriver", () => {
     ).rejects.toThrow("Cannot send message: Baileys driver is not connected");
   });
 
-  it("handles DisconnectReason.loggedOut as UNPAIRED", async () => {
+  it("handles DisconnectReason.loggedOut by purging stale credentials and regenerating a fresh QR session", async () => {
     const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-logout-"));
     const authDir = join(tempParent, "creds");
-    const { sock, ev } = createMockSocket();
+    const socket1 = createMockSocket();
+    const socket2 = createMockSocket();
+
+    let callIndex = 0;
+    const socketFactory = vi.fn().mockImplementation(() => {
+      callIndex += 1;
+      return callIndex === 1 ? socket1.sock : socket2.sock;
+    });
 
     const driver = new BaileysDriver({
       authDir,
+      reconnectInitialDelayMs: 15,
       authStateLoader: vi.fn().mockResolvedValue({
         state: {} as AuthenticationState,
         saveCreds: vi.fn(),
       }),
-      socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
-        config: UserFacingSocketConfig,
-      ) => WASocket,
+      socketFactory: socketFactory as unknown as (config: UserFacingSocketConfig) => WASocket,
     });
 
     try {
       await driver.connect();
-      ev.emit("connection.update", { connection: "open" });
+      writeFileSync(join(authDir, "creds.json"), '{"stale":true}');
+      writeFileSync(join(authDir, "session-1.json"), '{"ratchet":true}');
+      expect(readdirSync(authDir).length).toBe(2);
+
+      socket1.ev.emit("connection.update", { connection: "open" });
 
       // Emit logout close event (statusCode 401)
       const error = Object.assign(new Error("Connection logged out"), {
         output: { statusCode: 401 },
       });
-      ev.emit("connection.update", {
+      socket1.ev.emit("connection.update", {
         connection: "close",
         lastDisconnect: { error },
       });
 
+      // Immediately purges stale credentials and enters UNPAIRED
       expect(driver.getStatus().state).toBe("UNPAIRED");
       expect(driver.getStatus().connected).toBe(false);
+      expect(readdirSync(authDir)).toEqual([]);
+
+      // Automatically re-initializes connect() to generate a fresh QR code
+      await vi.waitFor(() => {
+        expect(socketFactory).toHaveBeenCalledTimes(2);
+      });
+
+      socket2.ev.emit("connection.update", { qr: "fresh-regenerated-qr-token" });
+      expect(driver.getStatus().state).toBe("PAIRING_QR_READY");
+      expect(driver.getQrCode()).toBe("fresh-regenerated-qr-token");
     } finally {
       await driver.disconnect();
       rmSync(tempParent, { recursive: true, force: true });

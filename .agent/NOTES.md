@@ -95,6 +95,7 @@ $$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textB
   - Baileys credentials: `/data/auth/baileys` (multi-file auth state).
   - WWebJS session: `/data/auth/wwebjs` (Chromium user data dir).
   - Directory permissions enforced on startup: `0700` (`rwx------`).
+  - Companion logout auto-purge (`purgeAuthDirectory`): Wipes invalidated child entries while preserving the volume bind-mount root and `0700` permissions on explicit companion logout (`DisconnectReason.loggedOut` / 401 in Baileys or `LOGOUT` / `NAVIGATION` / `auth_failure` in WWebJS), automatically regenerating a fresh Baileys pairing QR (`PAIRING_QR_READY`) and immediately failing over to standby if primary is unlinked.
 - **Chromium Docker Hygiene (aligned with `whatsapp-api`):**
   - Flags: `--no-sandbox`, `--disable-setuid-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu`, `--no-first-run`, `--no-zygote`.
   - Process teardown: `client.destroy()` followed by tree kill (`process.kill(-pid, 'SIGKILL')`) if not exited within 5 seconds.

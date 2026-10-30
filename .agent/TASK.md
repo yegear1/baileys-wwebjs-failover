@@ -7,24 +7,20 @@
 
 ## Active Task
 
-### [04.2] Automated Session Purge & QR Regeneration on Companion Logout
+### [04.3] VictoriaLogs Canonical NDJSON Logging & Docker Hygiene
 
 **Status:** `PLANNING`
-**Objective:** Automatically purge invalidated authentication files (`0700` re-initialization) and regenerate a fresh pairing QR session when either companion device is explicitly logged out (`DisconnectReason.loggedOut` / 401 in Baileys or `LOGOUT` / `auth_failure` in WWebJS), while triggering failover if the primary engine is unlinked.
+**Objective:** Align the gateway's `pino` logger, Docker Compose runtime environment, and documentation perimeter with the `victorialogs-integration` canonical NDJSON contract (`timestamp` ISO-8601 UTC, lowercase `level`, `service`, `app`, `env`, `message` root key, and `NO_COLOR=1`).
 
 **Implementation Plan:**
-1. **Auth Directory Purge Utility ([src/drivers/auth-utils.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/src/drivers/auth-utils.ts)):**
-   - Implement `purgeAuthDirectory(dirPath: string): void` to safely wipe all stale credential/profile contents inside `dirPath` while preserving the directory root (to remain compatible with Docker volume bind mounts) and re-enforcing `0700` permissions via `ensureSecureAuthDirectory(dirPath)`.
-2. **Baileys Companion Logout Purge & QR Regeneration ([src/drivers/baileys.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/src/drivers/baileys.ts)):**
-   - Add `autoPurgeOnLogout?: boolean` option (default `true`).
-   - When `handleDisconnect` detects `DisconnectReason.loggedOut` (401), invoke `purgeAuthDirectory(this.authDir)` to clear the invalidated noise/signal keys, transition status to `UNPAIRED`, and schedule a clean `connect()` initialization so Baileys immediately generates a fresh pairing QR (`PAIRING_QR_READY`) without requiring manual volume deletion or container restart.
-3. **WWebJS Companion Logout Purge ([src/drivers/wwebjs.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/src/drivers/wwebjs.ts)):**
-   - Add `autoPurgeOnLogout?: boolean` option (default `true`).
-   - When `auth_failure` or `disconnected` with `LOGOUT` / `NAVIGATION` occurs, tear down the Chromium instance cleanly, invoke `purgeAuthDirectory(this.authDir)` to remove invalidated LocalAuth Chromium profile data, and transition to `UNPAIRED`.
-4. **Orchestrator Unpaired Primary Handling ([src/fsm/orchestrator.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/src/fsm/orchestrator.ts)):**
-   - In `PRIMARY_ACTIVE`, if the primary driver transitions to `UNPAIRED` (explicit companion logout), immediately trip the circuit breaker and initiate failover to standby (`triggerFailover("Primary companion device logged out / unpaired")`).
-5. **Verification ([tests/baileys.test.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/tests/baileys.test.ts), [tests/wwebjs.test.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/tests/wwebjs.test.ts), [tests/orchestrator.test.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/tests/orchestrator.test.ts)):**
-   - Unit and integration tests verifying `purgeAuthDirectory` preserves the mount root while wiping stale files, Baileys 401 logout wipes auth state and regenerates a fresh QR code, WWebJS logout wipes profile state, and `FailoverOrchestrator` fails over immediately when primary becomes `UNPAIRED`.
+1. **Canonical VictoriaLogs Pino Formatter ([src/index.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/src/index.ts)):**
+   - Implement `createGatewayLogger(options?)` and configure `logger` with `messageKey: "message"`, lowercase string `level` formatter (`formatters: { level: (label) => ({ level: label }) }`), ISO-8601 UTC `timestamp` (`timestamp: () => \`,"timestamp":"\${new Date().toISOString()}"\``), and canonical `base` stream fields (`service: process.env.SERVICE_NAME || "baileys-wwebjs-failover"`, `app: process.env.SERVICE_NAME || "baileys-wwebjs-failover"`, `env: process.env.NODE_ENV === "development" ? "development" : "production"`).
+2. **Docker Compose & Environment Hygiene ([docker-compose.yml](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/docker-compose.yml), [.env.example](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/.env.example)):**
+   - Add `SERVICE_NAME: ${SERVICE_NAME:-baileys-wwebjs-failover}`, `LOG_LEVEL: ${LOG_LEVEL:-info}`, and `NO_COLOR: "1"` to `docker-compose.yml` and `.env.example`.
+3. **Documentation Perimeter ([README.md](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/README.md), [README.pt-br.md](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/README.pt-br.md), [.agent/NOTES.md](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/.agent/NOTES.md)):**
+   - Synchronize new environment variables (`SERVICE_NAME`, `LOG_LEVEL`, `NO_COLOR`, and multi-tier outbound delay variables) across `README.md` and `README.pt-br.md` following `readme-standard`.
+4. **Verification ([tests/smoke.test.ts](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/tests/smoke.test.ts)):**
+   - Add unit tests verifying that `createGatewayLogger` emits single-line NDJSON containing `timestamp` (ISO-8601 UTC), lowercase `level`, `service`, `app`, `env`, and root `message` fields.
 
 ---
 
@@ -53,13 +49,14 @@
 | [90.6] | Dynamic Chromium Health & Standby Puppeteer Restart Recovery | [`a6bb283`] | 2026-10-29 |
 | [90.7] | End-to-End Load & Sustained Queue Concurrency Verification | [`184a6ed`] | 2026-10-29 |
 | [90.8] | Soak Test & Long-Running Memory Leak Audit | [`59739d7`] | 2026-10-29 |
-| [04.1] | Multi-Tier Outbound Queue, Priority Jitter Delays & Typing Presence | [`e52cbf6`] | 2026-10-30 |
+| [04.1] | Multi-Tier Outbound Queue, Priority Jitter Delays & Typing Presence | [`687006a`] | 2026-10-30 |
+| [04.2] | Automated Session Purge & QR Regeneration on Companion Logout | [`a24c0c7`] | 2026-10-30 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- `[04.3]` VictoriaLogs Canonical NDJSON Logging & Docker Hygiene (`service`, `app`, `env`, ISO-8601 `timestamp`, `NO_COLOR=1`)
+*(No pending items in current epic)*
 
 ---
 

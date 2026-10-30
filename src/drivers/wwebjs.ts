@@ -6,7 +6,7 @@ import pkg from "whatsapp-web.js";
 import type { EngineStatus, IWhatsAppDriver, PresenceState } from "../contracts/driver.js";
 import type { InboundMessage, MessageReceipt, OutboundMessage } from "../contracts/messages.js";
 import { logger as defaultLogger } from "../index.js";
-import { ensureSecureAuthDirectory } from "./auth-utils.js";
+import { ensureSecureAuthDirectory, purgeAuthDirectory } from "./auth-utils.js";
 import {
   mapOutboundToWWebJSContent,
   mapWWebJSMessageToInbound,
@@ -121,6 +121,12 @@ export interface WWebJSDriverOptions {
    * Default: 1,000 ms (1s).
    */
   readonly restartBackoffMs?: number;
+  /**
+   * Whether to automatically tear down Chromium and purge invalidated LocalAuth profile
+   * data when the companion device is explicitly logged out or fails authentication.
+   * Default: true.
+   */
+  readonly autoPurgeOnLogout?: boolean;
 }
 
 /**
@@ -247,6 +253,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
   private readonly enableAutoRecovery: boolean;
   private readonly maxRestartRetries: number;
   private readonly restartBackoffMs: number;
+  private readonly autoPurgeOnLogout: boolean;
 
   private client: WWebJSClientInterface | null = null;
   private qrCode: string | undefined = undefined;
@@ -285,6 +292,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
     this.enableAutoRecovery = options.enableAutoRecovery ?? true;
     this.maxRestartRetries = options.maxRestartRetries ?? 3;
     this.restartBackoffMs = options.restartBackoffMs ?? 1000;
+    this.autoPurgeOnLogout = options.autoPurgeOnLogout ?? true;
   }
 
   public getStatus(): EngineStatus {
@@ -791,32 +799,18 @@ export class WWebJSDriver implements IWhatsAppDriver {
     });
 
     client.on("auth_failure", (msg: unknown) => {
-      this.qrCode = undefined;
       const error = typeof msg === "string" ? msg : "Authentication failed";
-      this.updateStatus({
-        engine: "wwebjs",
-        state: "UNPAIRED",
-        connected: false,
-        error,
-        restartCount: this.restartCount,
-        isHealthy: false,
-      });
+      this.handleCompanionLogout(client, error);
     });
 
     client.on("disconnected", (reason: unknown) => {
       this.qrCode = undefined;
       const reasonStr = typeof reason === "string" ? reason : "Disconnected";
-      const isLoggedOut = reasonStr.toUpperCase().includes("LOGOUT");
+      const upperReason = reasonStr.toUpperCase();
+      const isLoggedOut = upperReason.includes("LOGOUT") || upperReason.includes("NAVIGATION");
 
       if (isLoggedOut) {
-        this.updateStatus({
-          engine: "wwebjs",
-          state: "UNPAIRED",
-          connected: false,
-          error: reasonStr,
-          restartCount: this.restartCount,
-          isHealthy: false,
-        });
+        this.handleCompanionLogout(client, reasonStr);
       } else {
         this.handleUnexpectedBrowserTermination(reasonStr);
       }
@@ -886,8 +880,74 @@ export class WWebJSDriver implements IWhatsAppDriver {
     }
   }
 
+  private handleCompanionLogout(client: WWebJSClientInterface, reason: string): void {
+    this.qrCode = undefined;
+    this.stopHealthCheckTimer();
+    this.clearRecoveryRetryTimer();
+
+    if (this.autoPurgeOnLogout) {
+      this.logger.warn(
+        { authDir: this.authDir, reason },
+        "WWebJS companion device logged out or failed auth; purging invalidated profile state",
+      );
+      try {
+        purgeAuthDirectory(this.authDir);
+      } catch (purgeErr) {
+        this.logger.error({ purgeErr, authDir: this.authDir }, "Failed to purge WWebJS authDir");
+      }
+    }
+
+    this.updateStatus({
+      engine: "wwebjs",
+      state: "UNPAIRED",
+      connected: false,
+      error: reason,
+      restartCount: this.restartCount,
+      isHealthy: false,
+    });
+
+    if (this.autoPurgeOnLogout) {
+      void this.teardownLoggedOutClient(client);
+    }
+  }
+
+  private async teardownLoggedOutClient(client: WWebJSClientInterface): Promise<void> {
+    if (this.client === client) {
+      this.client = null;
+    }
+
+    const browserProcess = client.pupBrowser?.process?.();
+    const pid = browserProcess?.pid ?? this.lastKnownPid;
+
+    try {
+      await runWithTimeout(
+        client.destroy(),
+        this.teardownTimeoutMs,
+        "Client destroy timeout on logout",
+      );
+    } catch (err) {
+      this.logger.debug({ err }, "WWebJS client.destroy() failed during logout teardown");
+    }
+
+    if (pid && (isProcessAlive(pid) || !browserProcess?.killed)) {
+      this.terminateProcessTree(pid);
+    }
+
+    // INVARIANT: Re-purge after Chromium teardown in case the browser process flushed lockfiles
+    // or LevelDB state during shutdown.
+    try {
+      purgeAuthDirectory(this.authDir);
+    } catch {
+      // Ignore post-teardown purge errors
+    }
+  }
+
   private handleUnexpectedBrowserTermination(reason: string): void {
-    if (this.isExplicitDisconnect || this.status.state === "DISCONNECTED") {
+    if (
+      this.isExplicitDisconnect ||
+      this.status.state === "DISCONNECTED" ||
+      this.status.state === "UNPAIRED"
+    ) {
       return;
     }
     if (this.isRecovering) {
