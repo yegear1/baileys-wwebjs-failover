@@ -47,6 +47,9 @@
 
 ## Backlog (Upcoming, in priority order)
 
+> Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
+
+
 *(No pending items in current epic)*
 
 ---
