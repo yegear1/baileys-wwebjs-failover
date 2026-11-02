@@ -140,56 +140,88 @@ export function mapBaileysMessageToInbound(
 }
 
 /**
+ * Resolves media attachment to either a Node.js Buffer or URL object for Baileys.
+ */
+function resolveMediaPayload(media?: MediaAttachment, type = "media"): Buffer | { url: string } {
+  if (media?.data) {
+    if (typeof media.data === "string") {
+      const parts = media.data.split(";base64,");
+      const cleanBase64 = parts[1] ?? media.data;
+      return Buffer.from(cleanBase64, "base64");
+    }
+    return Buffer.from(media.data);
+  }
+  if (media?.url) {
+    if (media.url.startsWith("data:")) {
+      const [, base64] = media.url.split(";base64,");
+      if (base64) {
+        return Buffer.from(base64, "base64");
+      }
+    }
+    return { url: media.url };
+  }
+  throw new Error(`Outbound ${type} message requires media.url`);
+}
+
+/**
  * Maps unified OutboundMessage to Baileys AnyMessageContent.
  */
 export function mapOutboundToBaileysContent(outbound: OutboundMessage): AnyMessageContent {
   const caption = outbound.text ?? outbound.media?.caption;
+  const mentions =
+    outbound.mentions && outbound.mentions.length > 0 ? outbound.mentions : undefined;
 
   switch (outbound.type) {
     case "text":
-      return { text: outbound.text ?? "" };
+      return {
+        text: outbound.text ?? "",
+        ...(mentions !== undefined ? { mentions } : {}),
+      };
+
+    case "sticker": {
+      const payload = resolveMediaPayload(outbound.media, outbound.type);
+      return {
+        sticker: payload,
+        mimetype: outbound.media?.mimeType ?? "image/webp",
+      };
+    }
 
     case "image": {
-      if (!outbound.media?.url) {
-        throw new Error("Outbound image message requires media.url");
-      }
+      const payload = resolveMediaPayload(outbound.media, outbound.type);
       return {
-        image: { url: outbound.media.url },
-        mimetype: outbound.media.mimeType ?? "image/jpeg",
+        image: payload,
+        mimetype: outbound.media?.mimeType ?? "image/jpeg",
         ...(caption !== undefined ? { caption } : {}),
+        ...(mentions !== undefined ? { mentions } : {}),
       };
     }
 
     case "video": {
-      if (!outbound.media?.url) {
-        throw new Error("Outbound video message requires media.url");
-      }
+      const payload = resolveMediaPayload(outbound.media, outbound.type);
       return {
-        video: { url: outbound.media.url },
-        mimetype: outbound.media.mimeType ?? "video/mp4",
+        video: payload,
+        mimetype: outbound.media?.mimeType ?? "video/mp4",
         ...(caption !== undefined ? { caption } : {}),
+        ...(mentions !== undefined ? { mentions } : {}),
       };
     }
 
     case "audio": {
-      if (!outbound.media?.url) {
-        throw new Error("Outbound audio message requires media.url");
-      }
+      const payload = resolveMediaPayload(outbound.media, outbound.type);
       return {
-        audio: { url: outbound.media.url },
-        mimetype: outbound.media.mimeType ?? "audio/ogg",
+        audio: payload,
+        mimetype: outbound.media?.mimeType ?? "audio/ogg",
       };
     }
 
     case "document": {
-      if (!outbound.media?.url) {
-        throw new Error("Outbound document message requires media.url");
-      }
+      const payload = resolveMediaPayload(outbound.media, outbound.type);
       return {
-        document: { url: outbound.media.url },
-        mimetype: outbound.media.mimeType ?? "application/octet-stream",
+        document: payload,
+        mimetype: outbound.media?.mimeType ?? "application/octet-stream",
         ...(caption !== undefined ? { caption } : {}),
-        ...(outbound.media.filename !== undefined ? { fileName: outbound.media.filename } : {}),
+        ...(outbound.media?.filename !== undefined ? { fileName: outbound.media.filename } : {}),
+        ...(mentions !== undefined ? { mentions } : {}),
       };
     }
 

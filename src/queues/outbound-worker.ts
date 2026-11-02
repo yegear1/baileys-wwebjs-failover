@@ -7,8 +7,10 @@ import {
   DEFAULT_DLQ_QUEUE,
   DEFAULT_LOW_PRIORITY_OUTBOUND_QUEUE,
   DEFAULT_MAX_SEND_RETRIES,
+  DEFAULT_NOTIFICATIONS_QUEUE,
   DEFAULT_OUTBOUND_QUEUE,
   type IRedisClient,
+  type NativeSendPayload,
   type NormalizedOutboundRequest,
   type OutboundDelayConfig,
   type OutboundPriority,
@@ -21,6 +23,7 @@ export interface RedisOutboundWorkerOptions {
   readonly client: IRedisClient;
   readonly orchestrator: FailoverOrchestrator;
   readonly outboundQueueKey?: string | undefined;
+  readonly notificationsQueueKey?: string | undefined;
   readonly lowPriorityOutboundQueueKey?: string | undefined;
   readonly dlqQueueKey?: string | undefined;
   readonly maxSendRetries?: number | undefined;
@@ -39,6 +42,10 @@ const TRANSITION_STATES: ReadonlySet<FailoverState> = new Set([
   "RECOVERY_SWAP",
 ]);
 
+function isNativeSendPayload(payload: OutboundQueuePayload): payload is NativeSendPayload {
+  return "type" in payload && typeof (payload as { type?: unknown }).type === "string";
+}
+
 /**
  * Normalizes outbound queue payloads accepting both canonical whatsapp-api schemas
  * and native gateway message objects.
@@ -46,14 +53,18 @@ const TRANSITION_STATES: ReadonlySet<FailoverState> = new Set([
 export function normalizeOutboundPayload(raw: unknown): NormalizedOutboundRequest {
   const parsed: OutboundQueuePayload = OutboundQueuePayloadSchema.parse(raw);
 
-  if ("phone_number" in parsed) {
-    const to = parsed.phone_number.trim();
+  if (isNativeSendPayload(parsed)) {
+    const to = parsed.to.trim();
     const content: OutboundMessage = {
       to,
-      type: "text",
-      text: parsed.content,
+      type: parsed.type,
+      text: parsed.text,
       media: parsed.media,
-      quotedMessageId: parsed.quote_id ?? undefined,
+      quotedMessageId: parsed.quotedMessageId ?? undefined,
+      stickerName: parsed.stickerName ?? undefined,
+      stickerAuthor: parsed.stickerAuthor ?? undefined,
+      mentions: parsed.mentions ?? undefined,
+      sendAsDocument: parsed.sendAsDocument ?? undefined,
     };
     return {
       id: parsed.id ?? undefined,
@@ -64,16 +75,63 @@ export function normalizeOutboundPayload(raw: unknown): NormalizedOutboundReques
     };
   }
 
-  const to = parsed.to.trim();
+  const rawTarget = parsed.phone_number ?? parsed.number ?? parsed.to ?? "";
+  const to = rawTarget.trim();
+  if (!to) {
+    throw new Error("Recipient target is missing in outbound payload");
+  }
+
+  const body = parsed.content ?? parsed.message ?? parsed.text ?? "";
+  const quote = parsed.quotedMessageId ?? parsed.quote_id ?? parsed.reply_to_id ?? null;
+  const isSticker = Boolean(parsed.is_sticker ?? parsed.isSticker ?? parsed.asSticker ?? false);
+  const mediaBase64 = parsed.media_base64 ?? parsed.mediaBase64 ?? parsed.mediaData ?? null;
+  const mediaMimetype =
+    parsed.media_mimetype ??
+    parsed.mediaMimetype ??
+    parsed.mimetype ??
+    (isSticker ? "image/webp" : "image/jpeg");
+  const mediaUrl = parsed.media_url ?? parsed.mediaUrl ?? null;
+  const sendAsDocument = Boolean(parsed.send_as_document ?? parsed.sendAsDocument ?? false);
+  const stickerName =
+    parsed.sticker_name ?? parsed.stickerName ?? parsed.pack_name ?? parsed.packName ?? undefined;
+  const stickerAuthor = parsed.sticker_author ?? parsed.stickerAuthor ?? parsed.author ?? undefined;
+  const rawMentions = parsed.mentions ?? parsed.mentioned_ids ?? parsed.mentionedIds ?? undefined;
+  const mentions = Array.isArray(rawMentions) ? rawMentions : undefined;
+
+  let type: OutboundMessage["type"] = "text";
+  let media = parsed.media;
+
+  if (isSticker) {
+    type = "sticker";
+    media = {
+      mimeType: mediaMimetype,
+      data: mediaBase64 ?? undefined,
+      url: mediaUrl ?? undefined,
+    };
+  } else if (mediaBase64 || mediaUrl || media) {
+    type = sendAsDocument ? "document" : "image";
+    media = {
+      mimeType: mediaMimetype,
+      data: mediaBase64 ?? undefined,
+      url: mediaUrl ?? undefined,
+      caption: body.length > 0 ? body : undefined,
+      ...(media ?? {}),
+    };
+  }
+
   const content: OutboundMessage = {
     to,
-    type: parsed.type,
-    text: parsed.text,
-    media: parsed.media,
-    quotedMessageId: parsed.quotedMessageId ?? undefined,
+    type,
+    text: body,
+    media,
+    quotedMessageId: quote ?? undefined,
+    ...(stickerName ? { stickerName } : {}),
+    ...(stickerAuthor ? { stickerAuthor } : {}),
+    ...(mentions ? { mentions } : {}),
+    ...(sendAsDocument ? { sendAsDocument: true } : {}),
   };
   return {
-    id: parsed.id ?? undefined,
+    id: parsed.id ?? parsed.uuid ?? undefined,
     to,
     content,
     priority: parsed.priority,
@@ -92,6 +150,7 @@ export class RedisOutboundWorker {
   private readonly client: IRedisClient;
   private readonly orchestrator: FailoverOrchestrator;
   private readonly outboundQueueKey: string;
+  private readonly notificationsQueueKey: string;
   private readonly lowPriorityOutboundQueueKey: string;
   private readonly dlqQueueKey: string;
   private readonly maxSendRetries: number;
@@ -121,6 +180,7 @@ export class RedisOutboundWorker {
     this.client = options.client;
     this.orchestrator = options.orchestrator;
     this.outboundQueueKey = options.outboundQueueKey ?? DEFAULT_OUTBOUND_QUEUE;
+    this.notificationsQueueKey = options.notificationsQueueKey ?? DEFAULT_NOTIFICATIONS_QUEUE;
     this.lowPriorityOutboundQueueKey =
       options.lowPriorityOutboundQueueKey ?? DEFAULT_LOW_PRIORITY_OUTBOUND_QUEUE;
     this.dlqQueueKey = options.dlqQueueKey ?? DEFAULT_DLQ_QUEUE;
@@ -304,15 +364,16 @@ export class RedisOutboundWorker {
   }
 
   private getTargetQueueKeys(): string[] {
-    if (
-      this.lowPriorityOutboundQueueKey &&
-      this.lowPriorityOutboundQueueKey !== this.outboundQueueKey
-    ) {
-      // INVARIANT: Priority queue key must precede low-priority queue key in BLPOP array
-      // so Redis strictly drains priority items before low-priority items.
-      return [this.outboundQueueKey, this.lowPriorityOutboundQueueKey];
+    const keys = [this.outboundQueueKey];
+    if (this.notificationsQueueKey && !keys.includes(this.notificationsQueueKey)) {
+      keys.push(this.notificationsQueueKey);
     }
-    return [this.outboundQueueKey];
+    if (this.lowPriorityOutboundQueueKey && !keys.includes(this.lowPriorityOutboundQueueKey)) {
+      // INVARIANT: Priority queues must precede low-priority queue in BLPOP array
+      // so Redis strictly drains priority items before low-priority items.
+      keys.push(this.lowPriorityOutboundQueueKey);
+    }
+    return keys;
   }
 
   private async runLoop(): Promise<void> {

@@ -17,7 +17,8 @@ export const MediaAttachmentSchema = z.object({
   mimeType: z.string().min(1),
   filename: z.string().optional(),
   digest: z.string().optional(),
-  url: z.string().url().optional(),
+  url: z.string().optional(),
+  data: z.union([z.string(), z.instanceof(Uint8Array)]).optional(),
   sizeBytes: z.number().int().nonnegative().optional(),
   caption: z.string().optional(),
 });
@@ -39,10 +40,14 @@ export type InboundMessage = z.infer<typeof InboundMessageSchema>;
 
 export const OutboundMessageSchema = z.object({
   to: z.string().min(1),
-  type: z.enum(["text", "image", "video", "audio", "document"]),
+  type: z.enum(["text", "image", "video", "audio", "document", "sticker"]),
   text: z.string().optional(),
   media: MediaAttachmentSchema.optional(),
   quotedMessageId: z.string().optional(),
+  stickerName: z.string().optional(),
+  stickerAuthor: z.string().optional(),
+  mentions: z.array(z.string()).optional(),
+  sendAsDocument: z.boolean().optional(),
 });
 export type OutboundMessage = z.infer<typeof OutboundMessageSchema>;
 

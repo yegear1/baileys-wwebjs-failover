@@ -242,6 +242,26 @@ export class FailoverOrchestrator {
   }
 
   /**
+   * Dispatches an emoji reaction to a message via the currently active driver.
+   */
+  async sendReaction(messageId: string, reaction: string, remoteJid?: string): Promise<void> {
+    if (this.isShuttingDown || this.state === "SHUTDOWN") {
+      throw new Error("Cannot send reaction: FailoverOrchestrator is shut down");
+    }
+
+    const currentDriver = this.getCurrentActiveDriver();
+    if (!currentDriver) {
+      throw new Error(`Cannot send reaction: no active driver available in state ${this.state}`);
+    }
+
+    if (!currentDriver.sendReaction) {
+      throw new Error(`Driver ${currentDriver.name} does not support sendReaction`);
+    }
+
+    await currentDriver.sendReaction(messageId, reaction, remoteJid);
+  }
+
+  /**
    * Triggers automated or manual failover from primary to standby.
    */
   async triggerFailover(reason = "Failover triggered"): Promise<void> {

@@ -66,6 +66,9 @@ export interface WWebJSClientInterface {
   ): Promise<{ id?: { id?: string; _serialized?: string } }>;
   sendPresenceAvailable?: () => Promise<void>;
   getChatById?: (chatId: string) => Promise<WWebJSChatInterface>;
+  getMessageById?: (
+    messageId: string,
+  ) => Promise<{ react?: (reaction: string) => Promise<void> } | null>;
   on(event: string, listener: (...args: unknown[]) => void): this;
 }
 
@@ -514,6 +517,52 @@ export class WWebJSDriver implements IWhatsAppDriver {
       timestamp: Date.now(),
       status: "SENT",
     };
+  }
+
+  public async sendReaction(
+    messageId: string,
+    reaction: string,
+    remoteJid?: string,
+  ): Promise<void> {
+    if (!this.client || !this.status.connected) {
+      throw new Error("Cannot send reaction: WWebJS driver is not connected");
+    }
+
+    let targetChatId = remoteJid ? toWWebJSChatId(remoteJid) : undefined;
+    if (messageId.includes("_")) {
+      const parts = messageId.split("_");
+      const secondPart = parts[1];
+      if (parts.length >= 3 && !targetChatId && secondPart) {
+        targetChatId = toWWebJSChatId(secondPart);
+      }
+    }
+
+    let reacted = false;
+    if (typeof this.client.getMessageById === "function") {
+      try {
+        const msg = await this.client.getMessageById(messageId);
+        if (msg && typeof msg.react === "function") {
+          await msg.react(reaction);
+          reacted = true;
+        }
+      } catch (err) {
+        this.logger.debug(
+          { err, messageId },
+          "Direct getMessageById reaction failed in WWebJS, falling back",
+        );
+      }
+    }
+
+    if (!reacted) {
+      if (!targetChatId) {
+        throw new Error(
+          `Cannot send reaction: target chatId could not be determined for message ${messageId}`,
+        );
+      }
+      await this.client.sendMessage(targetChatId, reaction, {
+        reaction: true,
+      });
+    }
   }
 
   /**

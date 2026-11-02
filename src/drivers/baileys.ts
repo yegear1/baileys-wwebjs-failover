@@ -257,6 +257,51 @@ export class BaileysDriver implements IWhatsAppDriver {
     }
   }
 
+  public async sendReaction(
+    messageId: string,
+    reaction: string,
+    remoteJid?: string,
+  ): Promise<void> {
+    if (!this.socket || !this.status.connected) {
+      throw new Error("Cannot send reaction: Baileys driver is not connected");
+    }
+
+    let targetJid = remoteJid;
+    let fromMe = false;
+    let cleanMessageId = messageId;
+
+    if (messageId.includes("_")) {
+      const parts = messageId.split("_");
+      if (parts.length >= 3) {
+        fromMe = parts[0] === "true";
+        if (!targetJid && parts[1]) {
+          targetJid = parts[1];
+        }
+        if (parts[2]) {
+          cleanMessageId = parts[2];
+        }
+      }
+    }
+
+    if (!targetJid) {
+      throw new Error(
+        `Cannot send reaction: target JID could not be determined for message ${messageId}`,
+      );
+    }
+
+    const normalizedJid = this.normalizeJid(targetJid);
+    await this.socket.sendMessage(normalizedJid, {
+      react: {
+        text: reaction,
+        key: {
+          remoteJid: normalizedJid,
+          fromMe,
+          id: cleanMessageId,
+        },
+      },
+    });
+  }
+
   private handleConnectionUpdate(update: Partial<ConnectionState>): void {
     if (update.qr) {
       this.qrCode = update.qr;

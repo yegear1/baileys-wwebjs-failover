@@ -48,6 +48,11 @@ export interface WWebJSSendPayload {
     readonly caption?: string;
     readonly quotedMessageId?: string;
     readonly sendAudioAsVoice?: boolean;
+    readonly sendMediaAsSticker?: boolean;
+    readonly stickerName?: string;
+    readonly stickerAuthor?: string;
+    readonly mentions?: string[];
+    readonly sendMediaAsDocument?: boolean;
   };
 }
 
@@ -194,48 +199,83 @@ export async function mapOutboundToWWebJSContent(
 ): Promise<WWebJSSendPayload> {
   const caption = outbound.text ?? outbound.media?.caption;
   const quotedMessageId = outbound.quotedMessageId;
+  const mentions =
+    outbound.mentions && outbound.mentions.length > 0 ? outbound.mentions : undefined;
 
   if (outbound.type === "text") {
+    const options =
+      quotedMessageId !== undefined || mentions !== undefined
+        ? {
+            ...(quotedMessageId !== undefined ? { quotedMessageId } : {}),
+            ...(mentions !== undefined ? { mentions } : {}),
+          }
+        : undefined;
     return {
       content: outbound.text ?? "",
-      ...(quotedMessageId !== undefined ? { options: { quotedMessageId } } : {}),
+      ...(options ? { options } : {}),
     };
-  }
-
-  if (!outbound.media?.url) {
-    throw new Error(`Outbound ${outbound.type} message requires media.url`);
   }
 
   let mediaInstance: pkg.MessageMedia;
 
-  if (outbound.media.url.startsWith("data:")) {
-    const [header, base64Data] = outbound.media.url.split(";base64,");
-    if (!header || !base64Data) {
-      throw new Error("Invalid base64 data URL provided for media");
+  if (outbound.media?.data) {
+    let base64Data: string;
+    if (typeof outbound.media.data === "string") {
+      const parts = outbound.media.data.split(";base64,");
+      base64Data = parts[1] ?? outbound.media.data;
+    } else {
+      base64Data = Buffer.from(outbound.media.data).toString("base64");
     }
-    const mime = header.replace(/^data:/, "");
     mediaInstance = new MessageMedia(
-      mime || outbound.media.mimeType,
+      outbound.media.mimeType || "image/jpeg",
       base64Data,
       outbound.media.filename ?? null,
       outbound.media.sizeBytes ?? null,
     );
-  } else {
-    const fromUrlOptions: { filename?: string; unsafeMime?: boolean } = {
-      unsafeMime: true,
-    };
-    if (outbound.media.filename !== undefined) {
-      fromUrlOptions.filename = outbound.media.filename;
+  } else if (outbound.media?.url) {
+    if (outbound.media.url.startsWith("data:")) {
+      const [header, base64Data] = outbound.media.url.split(";base64,");
+      if (!header || !base64Data) {
+        throw new Error("Invalid base64 data URL provided for media");
+      }
+      const mime = header.replace(/^data:/, "");
+      mediaInstance = new MessageMedia(
+        mime || outbound.media.mimeType,
+        base64Data,
+        outbound.media.filename ?? null,
+        outbound.media.sizeBytes ?? null,
+      );
+    } else {
+      const fromUrlOptions: { filename?: string; unsafeMime?: boolean } = {
+        unsafeMime: true,
+      };
+      if (outbound.media.filename !== undefined) {
+        fromUrlOptions.filename = outbound.media.filename;
+      }
+      mediaInstance = await MessageMedia.fromUrl(outbound.media.url, fromUrlOptions);
     }
-    mediaInstance = await MessageMedia.fromUrl(outbound.media.url, fromUrlOptions);
+  } else {
+    throw new Error(`Outbound ${outbound.type} message requires media.url`);
   }
+
+  const isSticker = outbound.type === "sticker";
+  const isDocument = outbound.type === "document" || Boolean(outbound.sendAsDocument);
 
   return {
     content: mediaInstance,
     options: {
-      ...(caption !== undefined ? { caption } : {}),
+      ...(caption !== undefined && !isSticker ? { caption } : {}),
       ...(quotedMessageId !== undefined ? { quotedMessageId } : {}),
       ...(outbound.type === "audio" ? { sendAudioAsVoice: true } : {}),
+      ...(isSticker
+        ? {
+            sendMediaAsSticker: true,
+            ...(outbound.stickerName ? { stickerName: outbound.stickerName } : {}),
+            ...(outbound.stickerAuthor ? { stickerAuthor: outbound.stickerAuthor } : {}),
+          }
+        : {}),
+      ...(isDocument ? { sendMediaAsDocument: true } : {}),
+      ...(mentions !== undefined ? { mentions } : {}),
     },
   };
 }
