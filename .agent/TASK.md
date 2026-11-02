@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### [04.4] Next Feature / Hardening Milestone (Awaiting User Scope)
+### [04.5] Next Feature / Hardening Milestone (Awaiting User Scope)
 
 **Status:** `READY FOR PLANNING`
-**Objective:** All tasks in Epic `04.x` (`[04.1]` Multi-Tier Outbound Queue & Typing Presence, `[04.2]` Automated Session Purge & QR Regeneration on Companion Logout, and `[04.3]` VictoriaLogs Canonical NDJSON Logging & Docker Hygiene) are complete and verified. Awaiting user scope for the next feature or explicit release instruction.
+**Objective:** All tasks in Epic `04.x` (`[04.1]` Multi-Tier Outbound Queue & Typing Presence, `[04.2]` Automated Session Purge & QR Regeneration on Companion Logout, `[04.3]` VictoriaLogs Canonical NDJSON Logging & Docker Hygiene, and `[04.4]` Contract Parity with Services/Brain) are complete and verified. Awaiting user scope for the next feature or explicit release instruction.
 
 ---
 
