@@ -42,6 +42,7 @@
 | [04.1] | Multi-Tier Outbound Queue, Priority Jitter Delays & Typing Presence | [`687006a`] | 2026-10-30 |
 | [04.2] | Automated Session Purge & QR Regeneration on Companion Logout | [`0e09b8e`] | 2026-10-30 |
 | [04.3] | VictoriaLogs Canonical NDJSON Logging & Docker Hygiene | [`3f1973b`] | 2026-10-30 |
+| [04.4] | Contract Parity with Services/Brain (Stickers, Base64 Media & Reactions) | [`7a3a131`] | 2026-11-02 |
 
 ---
 
