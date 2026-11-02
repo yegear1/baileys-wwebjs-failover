@@ -5,9 +5,10 @@ export type EngineName = "baileys" | "wwebjs";
 export type EngineState =
   | "UNPAIRED"
   | "PAIRING_QR_READY"
+  | "PAIRING_MODE"
   | "CONNECTING"
   | "CONNECTED"
-  | "STANDBY"
+  | "STANDBY_READY"
   | "DISCONNECTED"
   | "DEGRADED"
   | "ERROR";
@@ -45,4 +46,9 @@ export interface IWhatsAppDriver {
   getStatus(): EngineStatus;
   checkHealth?(): Promise<{ isHealthy: boolean; details?: unknown }>;
   restart?(): Promise<void>;
+  /**
+   * Lazily launches a detached pairing session (no queue or active_engine side effects).
+   * Resolves once the first QR is available, the session authenticates, or pairing fails.
+   */
+  requestPairing?(): Promise<void>;
 }

@@ -130,6 +130,27 @@ export interface WWebJSDriverOptions {
    * Default: true.
    */
   readonly autoPurgeOnLogout?: boolean;
+  /**
+   * Hard timeout in milliseconds for a detached pairing session. Default: 180,000 ms (3 min).
+   */
+  readonly pairingTimeoutMs?: number;
+  /**
+   * Delay in milliseconds between authentication and Chromium teardown, allowing LocalAuth
+   * to flush credentials to disk. Default: 5,000 ms.
+   */
+  readonly pairingPersistDelayMs?: number;
+  /**
+   * Maximum time in milliseconds `requestPairing()` waits for the first QR or authentication.
+   * Default: 30,000 ms.
+   */
+  readonly pairingQrWaitMs?: number;
+}
+
+interface PairingSession {
+  readonly client: WWebJSClientInterface;
+  finished: boolean;
+  timeoutTimer: NodeJS.Timeout | undefined;
+  persistTimer: NodeJS.Timeout | undefined;
 }
 
 /**
@@ -257,7 +278,12 @@ export class WWebJSDriver implements IWhatsAppDriver {
   private readonly maxRestartRetries: number;
   private readonly restartBackoffMs: number;
   private readonly autoPurgeOnLogout: boolean;
+  private readonly pairingTimeoutMs: number;
+  private readonly pairingPersistDelayMs: number;
+  private readonly pairingQrWaitMs: number;
 
+  private pairing: PairingSession | null = null;
+  private pairingStart: Promise<void> | null = null;
   private client: WWebJSClientInterface | null = null;
   private qrCode: string | undefined = undefined;
   private status: EngineStatus = {
@@ -296,6 +322,9 @@ export class WWebJSDriver implements IWhatsAppDriver {
     this.maxRestartRetries = options.maxRestartRetries ?? 3;
     this.restartBackoffMs = options.restartBackoffMs ?? 1000;
     this.autoPurgeOnLogout = options.autoPurgeOnLogout ?? true;
+    this.pairingTimeoutMs = options.pairingTimeoutMs ?? 180_000;
+    this.pairingPersistDelayMs = options.pairingPersistDelayMs ?? 5000;
+    this.pairingQrWaitMs = options.pairingQrWaitMs ?? 30_000;
   }
 
   public getStatus(): EngineStatus {
@@ -350,6 +379,9 @@ export class WWebJSDriver implements IWhatsAppDriver {
   }
 
   public async connect(): Promise<void> {
+    // INVARIANT: A detached pairing Chromium holds the LocalAuth profile lock; it must be torn
+    // down before failover launches the real session on the same profile directory.
+    await this.abortPairing();
     ensureSecureAuthDirectory(this.authDir);
     this.isExplicitDisconnect = false;
 
@@ -460,6 +492,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
   }
 
   public async disconnect(): Promise<void> {
+    this.cancelPairingTimers();
     this.isExplicitDisconnect = true;
     this.isRecovering = false;
     this.stopHealthCheckTimer();
@@ -572,7 +605,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
   public async checkHealth(): Promise<ChromiumHealthReport> {
     if (!this.client) {
       const isStandbyOrDisconnected =
-        this.status.state === "DISCONNECTED" || this.status.state === "STANDBY";
+        this.status.state === "DISCONNECTED" || this.status.state === "STANDBY_READY";
       return {
         isHealthy: isStandbyOrDisconnected,
         browserConnected: false,
@@ -810,6 +843,179 @@ export class WWebJSDriver implements IWhatsAppDriver {
     }
 
     return { locksRemoved, zombiePidsTerminated: terminatedPids };
+  }
+
+  /**
+   * Launches a detached, lazy pairing session. Never touches queues or the active engine:
+   * once authenticated, credentials persist on disk, Chromium is destroyed and the driver
+   * rests as STANDBY_READY. QR expiry or the pairing timeout returns it to DISCONNECTED.
+   */
+  public requestPairing(): Promise<void> {
+    if (this.pairingStart) return this.pairingStart;
+    const state = this.status.state;
+    const idle = state === "DISCONNECTED" || state === "UNPAIRED";
+    if (this.client || this.pairing || !idle) return Promise.resolve();
+
+    this.pairingStart = this.startPairing().finally(() => {
+      this.pairingStart = null;
+    });
+    return this.pairingStart;
+  }
+
+  private startPairing(): Promise<void> {
+    ensureSecureAuthDirectory(this.authDir);
+    cleanupChromiumLocks(this.authDir, this.logger);
+    this.updateStatus({
+      engine: "wwebjs",
+      state: "PAIRING_MODE",
+      connected: false,
+      restartCount: this.restartCount,
+      isHealthy: true,
+    });
+
+    let client: WWebJSClientInterface;
+    try {
+      client = this.clientFactory({
+        authStrategy: new LocalAuth({ dataPath: this.authDir }),
+        puppeteer: {
+          headless: true,
+          args: [...this.chromiumArgs],
+          ...(this.executablePath ? { executablePath: this.executablePath } : {}),
+        },
+        takeoverOnConflict: true,
+      });
+    } catch (err) {
+      this.markPairingError(err);
+      return Promise.resolve();
+    }
+
+    const session: PairingSession = {
+      client,
+      finished: false,
+      timeoutTimer: undefined,
+      persistTimer: undefined,
+    };
+    this.client = client;
+    this.pairing = session;
+
+    return new Promise<void>((resolve) => {
+      const signal = setTimeout(resolve, this.pairingQrWaitMs);
+      signal.unref?.();
+      const firstSignal = (): void => {
+        clearTimeout(signal);
+        resolve();
+      };
+      this.wirePairingEvents(session, firstSignal);
+
+      session.timeoutTimer = setTimeout(() => {
+        void this.finishPairing(session, "DISCONNECTED", "Pairing timed out");
+      }, this.pairingTimeoutMs);
+      session.timeoutTimer.unref?.();
+
+      client.initialize().catch((err: unknown) => {
+        void this.finishPairing(session, "DISCONNECTED", String(err));
+        firstSignal();
+      });
+    });
+  }
+
+  private wirePairingEvents(session: PairingSession, firstSignal: () => void): void {
+    const { client } = session;
+
+    client.on("qr", (qr: unknown) => {
+      if (session.finished || typeof qr !== "string") return;
+      this.qrCode = qr;
+      this.updateStatus({
+        engine: "wwebjs",
+        state: "PAIRING_QR_READY",
+        connected: false,
+        restartCount: this.restartCount,
+        isHealthy: true,
+      });
+      firstSignal();
+    });
+
+    const onAuthenticated = (): void => {
+      if (session.finished || session.persistTimer) return;
+      this.qrCode = undefined;
+      firstSignal();
+      // INVARIANT: Grace period lets LocalAuth flush credentials to disk before Chromium dies.
+      session.persistTimer = setTimeout(() => {
+        void this.finishPairing(session, "STANDBY_READY");
+      }, this.pairingPersistDelayMs);
+      session.persistTimer.unref?.();
+    };
+    client.on("authenticated", onAuthenticated);
+    client.on("ready", onAuthenticated);
+
+    client.on("auth_failure", (msg: unknown) => {
+      void this.finishPairing(session, "DISCONNECTED", String(msg));
+      firstSignal();
+    });
+    client.on("disconnected", (reason: unknown) => {
+      void this.finishPairing(session, "DISCONNECTED", String(reason));
+      firstSignal();
+    });
+  }
+
+  private cancelPairingTimers(): void {
+    const session = this.pairing;
+    if (!session) return;
+    session.finished = true;
+    if (session.timeoutTimer) clearTimeout(session.timeoutTimer);
+    if (session.persistTimer) clearTimeout(session.persistTimer);
+    this.pairing = null;
+  }
+
+  private async abortPairing(): Promise<void> {
+    const session = this.pairing;
+    if (session) {
+      await this.finishPairing(session, "DISCONNECTED");
+    }
+  }
+
+  private async finishPairing(
+    session: PairingSession,
+    finalState: "STANDBY_READY" | "DISCONNECTED",
+    error?: string,
+  ): Promise<void> {
+    if (session.finished) return;
+    this.cancelPairingTimers();
+    this.qrCode = undefined;
+
+    const { client } = session;
+    const browserProcess = client.pupBrowser?.process?.();
+    const pid = browserProcess?.pid ?? this.lastKnownPid;
+    try {
+      await runWithTimeout(client.destroy(), this.teardownTimeoutMs, "Pairing destroy timeout");
+    } catch (err) {
+      this.logger.warn({ err }, "WWebJS pairing client.destroy() failed; proceeding to SIGKILL");
+    }
+    if (pid && (isProcessAlive(pid) || !browserProcess?.killed)) {
+      this.terminateProcessTree(pid);
+    }
+    cleanupChromiumLocks(this.authDir, this.logger);
+
+    if (this.client === client) this.client = null;
+    this.updateStatus({
+      engine: "wwebjs",
+      state: finalState,
+      connected: false,
+      ...(error ? { error } : {}),
+      restartCount: this.restartCount,
+      isHealthy: true,
+    });
+  }
+
+  private markPairingError(err: unknown): void {
+    this.updateStatus({
+      engine: "wwebjs",
+      state: "DISCONNECTED",
+      connected: false,
+      error: err instanceof Error ? err.message : String(err),
+      restartCount: this.restartCount,
+      isHealthy: false,
+    });
   }
 
   private wireClientEvents(client: WWebJSClientInterface): void {

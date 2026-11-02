@@ -164,7 +164,7 @@ describe("Gateway Soak & Long-Running Memory Leak Audit", () => {
         standbyDriver.connected = false;
         standbyDriver.status = {
           engine: "wwebjs",
-          state: "STANDBY",
+          state: "STANDBY_READY",
           connected: false,
         };
 
@@ -414,7 +414,7 @@ describe("Gateway Soak & Long-Running Memory Leak Audit", () => {
       standbyDriver.connected = false;
       standbyDriver.status = {
         engine: "wwebjs",
-        state: "STANDBY",
+        state: "STANDBY_READY",
         connected: false,
       };
 

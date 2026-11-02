@@ -107,7 +107,7 @@ function createSampleMessage(): InboundMessage {
 describe("FailoverOrchestrator", () => {
   it("starts in PRIMARY_ACTIVE and routes messages through primary engine", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
     const lock = new InMemoryFencingLock();
 
     const orchestrator = new FailoverOrchestrator({
@@ -165,7 +165,7 @@ describe("FailoverOrchestrator", () => {
 
   it("trips circuit breaker on consecutive send failures and fails over cleanly", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
     const lock = new InMemoryFencingLock();
     const transitions: FailoverState[] = [];
 
@@ -230,7 +230,7 @@ describe("FailoverOrchestrator", () => {
 
   it("buffers outbound messages during transition and flushes them when standby connects", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
 
     // Mock standby connect to take a moment so we can send during transition
     let resolveStandbyConnect: () => void = () => {};
@@ -348,7 +348,7 @@ describe("FailoverOrchestrator", () => {
 
   it("supports entering and exiting standby maintenance keepalive", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
 
     const orchestrator = new FailoverOrchestrator({
       primaryDriver: primary,
@@ -399,7 +399,7 @@ describe("FailoverOrchestrator", () => {
 
   it("handles primary status changes to ERROR by triggering failover", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
 
     const orchestrator = new FailoverOrchestrator({
       primaryDriver: primary,
@@ -436,7 +436,7 @@ describe("FailoverOrchestrator", () => {
 
   it("rejects pending buffered messages on shutdown", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
 
     // Keep standby connect hanging
     vi.spyOn(standby, "connect").mockImplementation(() => new Promise(() => {}));
@@ -476,7 +476,7 @@ describe("FailoverOrchestrator", () => {
 
   it("drains outbound buffer with custom reason on demand", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
 
     // Keep standby connect hanging
     vi.spyOn(standby, "connect").mockImplementation(() => new Promise(() => {}));
@@ -519,7 +519,7 @@ describe("FailoverOrchestrator", () => {
 
   it("suppresses failover to WWebJS standby when host connectivity probe reports offline", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
     const hostProbe = vi.fn().mockResolvedValue(false);
 
     const orchestrator = new FailoverOrchestrator({
@@ -547,7 +547,7 @@ describe("FailoverOrchestrator", () => {
 
   it("allows failover to proceed when host connectivity probe reports online", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
     const hostProbe = vi.fn().mockResolvedValue(true);
 
     const orchestrator = new FailoverOrchestrator({
@@ -573,7 +573,7 @@ describe("FailoverOrchestrator", () => {
 
   it("inspects existing primary connection state without calling connect() if already connected", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
 
     const orchestrator = new FailoverOrchestrator({
       primaryDriver: primary,
@@ -599,7 +599,7 @@ describe("FailoverOrchestrator", () => {
 
   it("tears down primary probe socket to prevent leaks when probe fails or times out", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
 
     const orchestrator = new FailoverOrchestrator({
       primaryDriver: primary,
@@ -630,7 +630,7 @@ describe("FailoverOrchestrator", () => {
 
   it("monitors standby onStatusChange during FALLBACK_ACTIVE and triggers failback when standby crashes and primary is healthy", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
 
     const orchestrator = new FailoverOrchestrator({
       primaryDriver: primary,
@@ -668,7 +668,7 @@ describe("FailoverOrchestrator", () => {
 
   it("immediately fails over to standby when primary companion transitions to UNPAIRED (401 logout)", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
 
     const orchestrator = new FailoverOrchestrator({
       primaryDriver: primary,
@@ -701,7 +701,7 @@ describe("FailoverOrchestrator", () => {
 
   it("preserves primary PAIRING_QR_READY socket during silent probe so operator can scan regenerated QR", async () => {
     const primary = new MockWhatsAppDriver("baileys");
-    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY", connected: false });
+    const standby = new MockWhatsAppDriver("wwebjs", { state: "STANDBY_READY", connected: false });
 
     const orchestrator = new FailoverOrchestrator({
       primaryDriver: primary,

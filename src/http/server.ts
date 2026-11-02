@@ -48,6 +48,7 @@ export class GatewayHttpServer {
 
     this.router = new RequestRouter({
       healthService: this.healthService,
+      orchestrator: options.orchestrator,
       qrService: this.qrService,
       metricsService: this.metricsService,
       primaryDriver: options.primaryDriver,

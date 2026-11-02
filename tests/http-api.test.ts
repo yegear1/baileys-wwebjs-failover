@@ -81,6 +81,12 @@ class MockQueueManager {
       requeuedCount: 0,
       dlqCount: 0,
     },
+    react: {
+      isRunning: true,
+      isPaused: false,
+      processedCount: 0,
+      errorCount: 0,
+    },
   };
 
   getStatus(): QueueManagerStatus {
@@ -106,7 +112,7 @@ describe("Dual-Device QR Pairing & Granular Health API", () => {
 
   beforeEach(async () => {
     primaryDriver = new MockTestDriver("baileys", { state: "CONNECTED", connected: true });
-    standbyDriver = new MockTestDriver("wwebjs", { state: "STANDBY", connected: false });
+    standbyDriver = new MockTestDriver("wwebjs", { state: "STANDBY_READY", connected: false });
     mockQueueManager = new MockQueueManager();
 
     orchestrator = new FailoverOrchestrator({
@@ -287,8 +293,8 @@ describe("Dual-Device QR Pairing & Granular Health API", () => {
       expect(data.qr_svg).toContain("<svg");
     });
 
-    it("returns 200 with status STANDBY and no QR when standby session is dormant", async () => {
-      standbyDriver.setStatus({ state: "STANDBY", connected: false });
+    it("returns 200 with status STANDBY_READY and no QR when standby session is dormant", async () => {
+      standbyDriver.setStatus({ state: "STANDBY_READY", connected: false });
       standbyDriver.setQrCode(undefined);
 
       const res = await fetch(`${baseUrl}/qr/wwebjs`);
@@ -296,7 +302,7 @@ describe("Dual-Device QR Pairing & Granular Health API", () => {
 
       const data = (await res.json()) as QrResponsePayload;
       expect(data.engine).toBe("wwebjs");
-      expect(data.status).toBe("STANDBY");
+      expect(data.status).toBe("STANDBY_READY");
       expect(data.qr_raw).toBeUndefined();
     });
   });

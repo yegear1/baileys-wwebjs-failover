@@ -1,11 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { IWhatsAppDriver } from "../contracts/driver.js";
+import type { FailoverOrchestrator } from "../fsm/orchestrator.js";
 import type { HealthService } from "./health-service.js";
 import type { MetricsService } from "./metrics-service.js";
 import type { QrService } from "./qr-service.js";
 
 export interface RequestRouterDependencies {
   readonly healthService: HealthService;
+  readonly orchestrator: FailoverOrchestrator;
   readonly qrService: QrService;
   readonly metricsService: MetricsService;
   readonly primaryDriver: IWhatsAppDriver;
@@ -17,6 +19,7 @@ export interface RequestRouterDependencies {
  */
 export class RequestRouter {
   private readonly healthService: HealthService;
+  private readonly orchestrator: FailoverOrchestrator;
   private readonly qrService: QrService;
   private readonly metricsService: MetricsService;
   private readonly primaryDriver: IWhatsAppDriver;
@@ -24,6 +27,7 @@ export class RequestRouter {
 
   constructor(dependencies: RequestRouterDependencies) {
     this.healthService = dependencies.healthService;
+    this.orchestrator = dependencies.orchestrator;
     this.qrService = dependencies.qrService;
     this.metricsService = dependencies.metricsService;
     this.primaryDriver = dependencies.primaryDriver;
@@ -78,7 +82,9 @@ export class RequestRouter {
         }
 
         case "/qr/wwebjs": {
-          const qrData = await this.qrService.getQrStatus(this.standbyDriver);
+          const qrData = await this.qrService.getQrStatus(this.standbyDriver, {
+            allowPairing: this.orchestrator.getState() === "PRIMARY_ACTIVE",
+          });
           res.writeHead(200);
           res.end(JSON.stringify(qrData));
           return;

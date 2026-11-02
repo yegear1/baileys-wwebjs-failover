@@ -24,7 +24,21 @@ export class QrService {
     this.renderer = renderer;
   }
 
-  async getQrStatus(driver: IWhatsAppDriver): Promise<QrResponsePayload> {
+  async getQrStatus(
+    driver: IWhatsAppDriver,
+    options: { readonly allowPairing?: boolean } = {},
+  ): Promise<QrResponsePayload> {
+    // INVARIANT: Pairing is lazy and only triggered for an idle driver when the caller confirms
+    // the gateway is in a safe state (PRIMARY_ACTIVE); it never touches queues or active_engine.
+    const idleState = driver.getStatus().state;
+    if (
+      options.allowPairing &&
+      typeof driver.requestPairing === "function" &&
+      (idleState === "DISCONNECTED" || idleState === "UNPAIRED")
+    ) {
+      await driver.requestPairing();
+    }
+
     const status = driver.getStatus();
     const qrRaw = typeof driver.getQrCode === "function" ? driver.getQrCode() : undefined;
 

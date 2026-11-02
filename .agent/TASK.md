@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### [04.5] Next Feature / Hardening Milestone (Awaiting User Scope)
+### [05.2] Next Feature / Hardening Milestone (Awaiting User Scope)
 
 **Status:** `READY FOR PLANNING`
-**Objective:** All tasks in Epic `04.x` (`[04.1]` Multi-Tier Outbound Queue & Typing Presence, `[04.2]` Automated Session Purge & QR Regeneration on Companion Logout, `[04.3]` VictoriaLogs Canonical NDJSON Logging & Docker Hygiene, and `[04.4]` Contract Parity with Services/Brain) are complete and verified. Awaiting user scope for the next feature or explicit release instruction.
+**Objective:** `[05.1]` complete and verified. Awaiting user scope for the next feature or explicit release instruction.
 
 ---
 
@@ -43,6 +43,7 @@
 | [04.2] | Automated Session Purge & QR Regeneration on Companion Logout | [`0e09b8e`] | 2026-10-30 |
 | [04.3] | VictoriaLogs Canonical NDJSON Logging & Docker Hygiene | [`3f1973b`] | 2026-10-30 |
 | [04.4] | Contract Parity with Services/Brain (Stickers, Base64 Media & Reactions) | [`7a3a131`] | 2026-11-02 |
+| [05.1] | On-Demand Detached Pairing Lifecycle for Standby WWebJS | [`17a7729`] | 2026-11-02 |
 
 ---
 
