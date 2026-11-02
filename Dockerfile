@@ -3,12 +3,12 @@
 # ==============================================================================
 # Stage 1: Build & Prune Dependencies
 # ==============================================================================
-FROM node:20-bookworm-slim AS builder
+FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
 
-# Install pnpm
-RUN npm install -g pnpm@9
+# Enable corepack and prepare pnpm matching project lockfile
+RUN corepack enable && corepack prepare pnpm@12.16.1 --activate
 
 # Copy package manifests and workspace configuration
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json tsconfig.build.json ./
