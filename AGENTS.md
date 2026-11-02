@@ -51,18 +51,19 @@ The agent MUST minimize default token load by following progressive disclosure:
 
 ## Fail-Stop Protocol & Escalation Hierarchy (Circuit Breaker)
 
-If an automated command (test, build, typecheck, lint) fails **2 consecutive times** with the same root cause:
+If an automated command (test, build, typecheck, lint) fails **3 consecutive times** with the same root cause:
 1. The agent MUST STOP execution immediately.
 2. The agent MUST NOT attempt unapproved speculative refactorings.
 3. The agent MUST escalate to the user with a structured diagnostic block:
    ```yaml
    failure_stage: "test | typecheck | lint | build"
    error_signature: "exact error message"
-   consecutive_failures: 2
+   consecutive_failures: 3
    root_cause_analysis: "technical description"
    attempted_fixes:
      - "fix 1 description"
      - "fix 2 description"
+     - "fix 3 description"
    pending_decision: "question or proposed options for user"
    ```
 
