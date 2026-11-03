@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import makeWASocket, {
   type AuthenticationState,
+  type CacheStore,
   type ConnectionState,
   DisconnectReason,
+  downloadMediaMessage,
+  type proto,
   type UserFacingSocketConfig,
   useMultiFileAuthState,
+  type WAMessage,
   type WASocket,
 } from "@whiskeysockets/baileys";
 import type { Logger } from "pino";
@@ -13,6 +17,63 @@ import type { InboundMessage, MessageReceipt, OutboundMessage } from "../contrac
 import { logger as defaultLogger } from "../index.js";
 import { ensureSecureAuthDirectory, purgeAuthDirectory } from "./auth-utils.js";
 import { mapBaileysMessageToInbound, mapOutboundToBaileysContent } from "./baileys-mapper.js";
+
+/**
+ * Bounded retry counter cache for Baileys.
+ *
+ * INVARIANT: Baileys default cache deletes the key when retry limit is reached,
+ * which resets the retry counter to zero on WhatsApp's next attempt and causes an
+ * infinite retry loop. This cache locks the counter at maxRetries for the duration
+ * of TTL to permanently silence repeat retry requests for un-decryptable messages.
+ */
+export class BoundedRetryCounterCache implements CacheStore {
+  private readonly store = new Map<string, { count: number; expiresAt: number }>();
+  private readonly ttlMs: number;
+  private readonly maxEntries: number;
+  private readonly maxRetries: number;
+
+  constructor(options?: { ttlMs?: number; maxEntries?: number; maxRetries?: number }) {
+    this.ttlMs = options?.ttlMs ?? 3600 * 1000; // 1 hour default
+    this.maxEntries = options?.maxEntries ?? 2000;
+    this.maxRetries = options?.maxRetries ?? 3;
+  }
+
+  get<T>(key: string): T | undefined {
+    const entry = this.store.get(key);
+    if (!entry) return undefined;
+    if (Date.now() > entry.expiresAt) {
+      this.store.delete(key);
+      return undefined;
+    }
+    return entry.count as unknown as T;
+  }
+
+  set<T>(key: string, value: T): void {
+    if (this.store.size >= this.maxEntries) {
+      const oldestKey = this.store.keys().next().value;
+      if (oldestKey) this.store.delete(oldestKey);
+    }
+    const count = typeof value === "number" ? value : 1;
+    this.store.set(key, { count, expiresAt: Date.now() + this.ttlMs });
+  }
+
+  del(key: string): void {
+    const entry = this.store.get(key);
+    // INVARIANT: Do not delete counter if the message has already hit maxRetries,
+    // preventing infinite retry receipt loops on broken sessions.
+    if (entry && entry.count < this.maxRetries) {
+      this.store.delete(key);
+    }
+  }
+
+  clear(): void {
+    this.store.clear();
+  }
+
+  flushAll(): void {
+    this.clear();
+  }
+}
 
 export interface BaileysDriverOptions {
   readonly authDir?: string;
@@ -49,6 +110,26 @@ export interface BaileysDriverOptions {
    * Default: 30,000 ms.
    */
   readonly reconnectMaxDelayMs?: number;
+  /**
+   * Optional custom media downloader for testing or custom media fetch pipelines.
+   */
+  readonly mediaDownloader?: (msg: proto.IWebMessageInfo) => Promise<Buffer | null>;
+  /**
+   * Maximum media download size in bytes. Default: 16 MiB.
+   */
+  readonly maxMediaDownloadSizeBytes?: number;
+  /**
+   * Maximum automatic message retry count before permanently suppressing retries. Default: 3.
+   */
+  readonly maxMsgRetryCount?: number;
+  /**
+   * Maximum number of messages kept in memory for retry resolution and reaction targeting. Default: 1000.
+   */
+  readonly maxStoredMessages?: number;
+  /**
+   * Optional custom retry counter cache.
+   */
+  readonly retryCounterCache?: CacheStore;
 }
 
 export class BaileysSendTimeoutError extends Error {
@@ -86,6 +167,14 @@ export class BaileysDriver implements IWhatsAppDriver {
   private readonly reconnectMaxAttempts: number;
   private readonly reconnectInitialDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
+  private readonly mediaDownloader:
+    | ((msg: proto.IWebMessageInfo) => Promise<Buffer | null>)
+    | undefined;
+  private readonly maxMediaDownloadSizeBytes: number;
+  private readonly maxMsgRetryCount: number;
+  private readonly maxStoredMessages: number;
+  private readonly retryCounterCache: CacheStore;
+  private readonly messageStore = new Map<string, { message: proto.IMessage; remoteJid: string }>();
 
   private socket: WASocket | null = null;
   private qrCode: string | undefined = undefined;
@@ -117,6 +206,28 @@ export class BaileysDriver implements IWhatsAppDriver {
     this.reconnectMaxAttempts = options.reconnectMaxAttempts ?? 5;
     this.reconnectInitialDelayMs = options.reconnectInitialDelayMs ?? 1000;
     this.reconnectMaxDelayMs = options.reconnectMaxDelayMs ?? 30000;
+    this.mediaDownloader = options.mediaDownloader;
+    this.maxMediaDownloadSizeBytes = options.maxMediaDownloadSizeBytes ?? 16 * 1024 * 1024;
+    this.maxMsgRetryCount = options.maxMsgRetryCount ?? 3;
+    this.maxStoredMessages = options.maxStoredMessages ?? 1000;
+    this.retryCounterCache =
+      options.retryCounterCache ??
+      new BoundedRetryCounterCache({ maxRetries: this.maxMsgRetryCount });
+  }
+
+  public storeMessage(id: string, remoteJid: string, message: proto.IMessage): void {
+    if (this.messageStore.size >= this.maxStoredMessages) {
+      const oldestKey = this.messageStore.keys().next().value;
+      if (oldestKey) {
+        this.messageStore.delete(oldestKey);
+      }
+    }
+    this.messageStore.set(id, { message, remoteJid });
+  }
+
+  public async getMessage(key: proto.IMessageKey): Promise<proto.IMessage | undefined> {
+    if (!key.id) return undefined;
+    return this.messageStore.get(key.id)?.message;
   }
 
   public getStatus(): EngineStatus {
@@ -184,6 +295,9 @@ export class BaileysDriver implements IWhatsAppDriver {
       logger: this.logger.child({ engine: "baileys" }) as unknown as NonNullable<
         UserFacingSocketConfig["logger"]
       >,
+      getMessage: async (key) => this.getMessage(key),
+      msgRetryCounterCache: this.retryCounterCache,
+      maxMsgRetryCount: this.maxMsgRetryCount,
     });
 
     this.socket = sock;
@@ -244,6 +358,10 @@ export class BaileysDriver implements IWhatsAppDriver {
       const sent = await Promise.race([sendPromise, timeoutPromise]);
       const messageId = sent?.key?.id ?? randomUUID();
 
+      if (sent?.message) {
+        this.storeMessage(messageId, targetJid, sent.message);
+      }
+
       return {
         id: messageId,
         to,
@@ -280,6 +398,15 @@ export class BaileysDriver implements IWhatsAppDriver {
         if (parts[2]) {
           cleanMessageId = parts[2];
         }
+      }
+    }
+
+    // INVARIANT: If targetJid was not provided or parsed from compound ID,
+    // look it up in the bounded message store before throwing.
+    if (!targetJid) {
+      const stored = this.messageStore.get(cleanMessageId);
+      if (stored) {
+        targetJid = stored.remoteJid;
       }
     }
 
@@ -461,20 +588,148 @@ export class BaileysDriver implements IWhatsAppDriver {
     this.qrCode = undefined;
   }
 
-  private async handleMessagesUpsert(upsert: { messages: unknown[]; type: string }): Promise<void> {
-    if (this.messageHandlers.size === 0) return;
+  public async downloadInboundMedia(rawMessage: proto.IWebMessageInfo): Promise<Buffer | null> {
+    try {
+      const rawContent = rawMessage.message;
+      if (!rawContent) return null;
 
+      const messageContent =
+        rawContent.ephemeralMessage?.message ??
+        rawContent.viewOnceMessage?.message ??
+        rawContent.viewOnceMessageV2?.message ??
+        rawContent.viewOnceMessageV2Extension?.message ??
+        rawContent;
+
+      const hasDirect = Boolean(
+        messageContent.imageMessage ||
+          messageContent.videoMessage ||
+          messageContent.stickerMessage ||
+          messageContent.documentMessage ||
+          messageContent.audioMessage,
+      );
+
+      const quotedMsg = messageContent.extendedTextMessage?.contextInfo?.quotedMessage;
+      const unwrappedQuoted = quotedMsg
+        ? (quotedMsg.ephemeralMessage?.message ??
+          quotedMsg.viewOnceMessage?.message ??
+          quotedMsg.viewOnceMessageV2?.message ??
+          quotedMsg)
+        : undefined;
+
+      const hasQuoted = Boolean(
+        unwrappedQuoted?.imageMessage ||
+          unwrappedQuoted?.videoMessage ||
+          unwrappedQuoted?.stickerMessage ||
+          unwrappedQuoted?.documentMessage ||
+          unwrappedQuoted?.audioMessage,
+      );
+
+      if (!hasDirect && !hasQuoted) return null;
+
+      const targetMsg = hasDirect
+        ? {
+            ...rawMessage,
+            message: messageContent,
+          }
+        : {
+            key: {
+              remoteJid: rawMessage.key.remoteJid ?? null,
+              id:
+                messageContent.extendedTextMessage?.contextInfo?.stanzaId ??
+                rawMessage.key.id ??
+                null,
+              participant:
+                messageContent.extendedTextMessage?.contextInfo?.participant ??
+                rawMessage.key.participant ??
+                null,
+              fromMe: false,
+            },
+            message: unwrappedQuoted,
+          };
+
+      const mediaSize =
+        messageContent.imageMessage?.fileLength ??
+        messageContent.videoMessage?.fileLength ??
+        messageContent.stickerMessage?.fileLength ??
+        messageContent.documentMessage?.fileLength ??
+        unwrappedQuoted?.imageMessage?.fileLength ??
+        unwrappedQuoted?.videoMessage?.fileLength ??
+        unwrappedQuoted?.stickerMessage?.fileLength ??
+        unwrappedQuoted?.documentMessage?.fileLength;
+
+      const sizeNum =
+        typeof mediaSize === "object" && mediaSize !== null && "toNumber" in mediaSize
+          ? (mediaSize as { toNumber: () => number }).toNumber()
+          : Number(mediaSize || 0);
+
+      if (sizeNum > this.maxMediaDownloadSizeBytes) {
+        this.logger.warn(
+          { msgId: rawMessage.key.id, sizeNum, max: this.maxMediaDownloadSizeBytes },
+          "Inbound media exceeds maximum download size; skipping buffer download",
+        );
+        return null;
+      }
+
+      if (this.mediaDownloader) {
+        return await this.mediaDownloader(targetMsg as proto.IWebMessageInfo);
+      }
+
+      const reuploadRequest =
+        this.socket?.updateMediaMessage ??
+        (async (_msg: WAMessage): Promise<WAMessage> => {
+          throw new Error("Socket disconnected; cannot reupload media");
+        });
+
+      const buffer = await downloadMediaMessage(
+        targetMsg as WAMessage,
+        "buffer",
+        {},
+        {
+          logger: this.logger.child({ component: "media-download" }) as unknown as NonNullable<
+            UserFacingSocketConfig["logger"]
+          >,
+          reuploadRequest,
+        },
+      );
+
+      return buffer as Buffer;
+    } catch (err) {
+      this.logger.warn(
+        { err, msgId: rawMessage.key.id },
+        "Failed to download media buffer for inbound message",
+      );
+      return null;
+    }
+  }
+
+  private async handleMessagesUpsert(upsert: { messages: unknown[]; type: string }): Promise<void> {
     const selfJid = this.socket?.user?.id;
 
     for (const rawMessage of upsert.messages) {
       if (!rawMessage || typeof rawMessage !== "object") continue;
 
-      const inbound = mapBaileysMessageToInbound(
-        rawMessage as Parameters<typeof mapBaileysMessageToInbound>[0],
-        selfJid,
-      );
+      const webMsg = rawMessage as proto.IWebMessageInfo;
+      if (webMsg.key?.id && webMsg.message) {
+        this.storeMessage(webMsg.key.id, webMsg.key.remoteJid ?? "", webMsg.message);
+      }
+
+      if (this.messageHandlers.size === 0) continue;
+
+      const inbound = mapBaileysMessageToInbound(webMsg, selfJid);
 
       if (inbound) {
+        // INVARIANT: Automatically ingest media buffers (including quoted stickers/photos)
+        // and populate base64 data so downstream workers can process media without roundtrips.
+        if (inbound.media && !inbound.media.data) {
+          const mediaBuf = await this.downloadInboundMedia(webMsg);
+          if (mediaBuf) {
+            inbound.media = {
+              ...inbound.media,
+              data: mediaBuf.toString("base64"),
+            };
+          }
+        }
+
         for (const handler of this.messageHandlers) {
           try {
             await handler(inbound);

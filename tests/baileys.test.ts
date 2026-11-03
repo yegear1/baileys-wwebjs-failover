@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   BaileysDriver,
   BaileysSendTimeoutError,
+  BoundedRetryCounterCache,
   ensureSecureAuthDirectory,
   mapBaileysMessageToInbound,
   mapOutboundToBaileysContent,
@@ -678,5 +679,244 @@ describe("BaileysDriver", () => {
       await driver.disconnect();
       rmSync(tempParent, { recursive: true, force: true });
     }
+  });
+
+  describe("BoundedRetryCounterCache", () => {
+    it("tracks retry counts and locks when reaching maxRetries without deletion", () => {
+      const cache = new BoundedRetryCounterCache({ maxRetries: 3 });
+
+      expect(cache.get("msg1")).toBeUndefined();
+      cache.set("msg1", 1);
+      expect(cache.get("msg1")).toBe(1);
+
+      cache.del("msg1");
+      expect(cache.get("msg1")).toBeUndefined();
+
+      // Set to maxRetries
+      cache.set("msg1", 3);
+      expect(cache.get("msg1")).toBe(3);
+
+      // Attempt deletion on maxRetries (Baileys behavior) should be ignored
+      cache.del("msg1");
+      expect(cache.get("msg1")).toBe(3);
+    });
+
+    it("flushes and clears on flushAll()", () => {
+      const cache = new BoundedRetryCounterCache();
+      cache.set("k1", 2);
+      cache.set("k2", 3);
+
+      cache.flushAll();
+      expect(cache.get("k1")).toBeUndefined();
+      expect(cache.get("k2")).toBeUndefined();
+    });
+  });
+
+  describe("Inbound Media Buffer Download & Resilience", () => {
+    it("automatically downloads media buffer and populates media.data as base64", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-media-"));
+      const authDir = join(tempParent, "creds");
+      const { sock, ev } = createMockSocket();
+      const mockBuffer = Buffer.from("test image binary data");
+
+      const mockDownloader = vi.fn().mockResolvedValue(mockBuffer);
+
+      const driver = new BaileysDriver({
+        authDir,
+        mediaDownloader: mockDownloader,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: {} as AuthenticationState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      const receivedMessages: unknown[] = [];
+      driver.onMessage(async (msg) => {
+        receivedMessages.push(msg);
+      });
+
+      try {
+        await driver.connect();
+
+        const fakeImageMsg = {
+          key: {
+            id: "msg-media-1",
+            remoteJid: "120363410090219458@g.us",
+            fromMe: false,
+          },
+          messageTimestamp: 1700000000,
+          message: {
+            imageMessage: {
+              mimetype: "image/jpeg",
+              caption: "Test photo",
+              fileLength: 50,
+            },
+          },
+        };
+
+        ev.emit("messages.upsert", {
+          messages: [fakeImageMsg],
+          type: "notify",
+        });
+
+        await vi.waitFor(() => {
+          expect(receivedMessages.length).toBe(1);
+        });
+
+        const received = receivedMessages[0] as {
+          id: string;
+          media?: { data?: string; mimeType: string };
+        };
+        expect(received.id).toBe("msg-media-1");
+        expect(received.media).toBeDefined();
+        expect(received.media?.data).toBe(mockBuffer.toString("base64"));
+        expect(mockDownloader).toHaveBeenCalledTimes(1);
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+
+    it("downloads media buffer from quotedMessage when replying with command !s", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-quoted-"));
+      const authDir = join(tempParent, "creds");
+      const { sock, ev } = createMockSocket();
+      const mockStickerBuffer = Buffer.from("quoted sticker binary");
+
+      const mockDownloader = vi.fn().mockResolvedValue(mockStickerBuffer);
+
+      const driver = new BaileysDriver({
+        authDir,
+        mediaDownloader: mockDownloader,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: {} as AuthenticationState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      const receivedMessages: unknown[] = [];
+      driver.onMessage(async (msg) => {
+        receivedMessages.push(msg);
+      });
+
+      try {
+        await driver.connect();
+
+        const fakeQuotedMsg = {
+          key: {
+            id: "cmd-sticker-1",
+            remoteJid: "120363410090219458@g.us",
+            fromMe: false,
+          },
+          messageTimestamp: 1700000000,
+          message: {
+            extendedTextMessage: {
+              text: "!s",
+              contextInfo: {
+                stanzaId: "target-quoted-id",
+                quotedMessage: {
+                  imageMessage: {
+                    mimetype: "image/png",
+                    fileLength: 120,
+                  },
+                },
+              },
+            },
+          },
+        };
+
+        ev.emit("messages.upsert", {
+          messages: [fakeQuotedMsg],
+          type: "notify",
+        });
+
+        await vi.waitFor(() => {
+          expect(receivedMessages.length).toBe(1);
+        });
+
+        const received = receivedMessages[0] as {
+          id: string;
+          textBody?: string;
+          media?: { data?: string; mimeType: string };
+        };
+        expect(received.id).toBe("cmd-sticker-1");
+        expect(received.textBody).toBe("!s");
+        expect(received.media).toBeDefined();
+        expect(received.media?.data).toBe(mockStickerBuffer.toString("base64"));
+        expect(mockDownloader).toHaveBeenCalledTimes(1);
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves targetJid from bounded messageStore when sendReaction receives raw ID without remoteJid", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-reaction-"));
+      const authDir = join(tempParent, "creds");
+      const { sock, ev, sendMessageMock } = createMockSocket();
+
+      const driver = new BaileysDriver({
+        authDir,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: {} as AuthenticationState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      try {
+        await driver.connect();
+        ev.emit("connection.update", { connection: "open" });
+
+        // Simulate incoming message to populate messageStore
+        const incoming = {
+          key: {
+            id: "AC7E4D5CA9D30649B95CF1340EB8D5DB",
+            remoteJid: "120363410090219458@g.us",
+            fromMe: false,
+          },
+          messageTimestamp: 1700000000,
+          message: {
+            conversation: "!dl https://example.com/video",
+          },
+        };
+
+        ev.emit("messages.upsert", {
+          messages: [incoming],
+          type: "notify",
+        });
+
+        // sendReaction without remoteJid parameter should look up targetJid from store
+        await driver.sendReaction("AC7E4D5CA9D30649B95CF1340EB8D5DB", "⏳");
+
+        expect(sendMessageMock).toHaveBeenCalledWith("120363410090219458@g.us", {
+          react: {
+            text: "⏳",
+            key: {
+              remoteJid: "120363410090219458@g.us",
+              fromMe: false,
+              id: "AC7E4D5CA9D30649B95CF1340EB8D5DB",
+            },
+          },
+        });
+
+        // getMessage callback returns stored message
+        const retrieved = await driver.getMessage({
+          id: "AC7E4D5CA9D30649B95CF1340EB8D5DB",
+        });
+        expect(retrieved?.conversation).toBe("!dl https://example.com/video");
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
   });
 });

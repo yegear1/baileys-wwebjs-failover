@@ -71,11 +71,17 @@ export function mapBaileysMessageToInbound(
   const fromMe = Boolean(key.fromMe);
   const senderJid = key.participant ?? (fromMe ? (selfJid ?? remoteJid) : remoteJid);
   const timestamp = extractTimestampSeconds(msg.messageTimestamp);
-  const messageContent = msg.message;
-
-  if (!messageContent) {
+  const rawContent = msg.message;
+  if (!rawContent) {
     return null;
   }
+
+  const messageContent =
+    rawContent.ephemeralMessage?.message ??
+    rawContent.viewOnceMessage?.message ??
+    rawContent.viewOnceMessageV2?.message ??
+    rawContent.viewOnceMessageV2Extension?.message ??
+    rawContent;
 
   let type: MessageType = "unknown";
   let textBody: string | undefined;
@@ -116,6 +122,36 @@ export function mapBaileysMessageToInbound(
   } else if (messageContent.contactMessage) {
     type = "contact";
     textBody = messageContent.contactMessage.displayName ?? undefined;
+  }
+
+  // INVARIANT: If message is text quoting a media attachment (e.g. !sticker command replying
+  // to a photo or sticker), populate media attachment metadata so workers receive media context.
+  if (!media && messageContent.extendedTextMessage?.contextInfo?.quotedMessage) {
+    const quoted = messageContent.extendedTextMessage.contextInfo.quotedMessage;
+    const unwrappedQuoted =
+      quoted.ephemeralMessage?.message ??
+      quoted.viewOnceMessage?.message ??
+      quoted.viewOnceMessageV2?.message ??
+      quoted;
+
+    if (unwrappedQuoted.imageMessage) {
+      media = extractMediaAttachment(unwrappedQuoted.imageMessage, "image/jpeg");
+    } else if (unwrappedQuoted.videoMessage) {
+      media = extractMediaAttachment(unwrappedQuoted.videoMessage, "video/mp4");
+    } else if (unwrappedQuoted.stickerMessage) {
+      media = extractMediaAttachment(unwrappedQuoted.stickerMessage, "image/webp");
+    } else if (unwrappedQuoted.documentMessage) {
+      const base = extractMediaAttachment(
+        unwrappedQuoted.documentMessage,
+        "application/octet-stream",
+      );
+      media = {
+        ...base,
+        filename: unwrappedQuoted.documentMessage.fileName ?? undefined,
+      };
+    } else if (unwrappedQuoted.audioMessage) {
+      media = extractMediaAttachment(unwrappedQuoted.audioMessage, "audio/ogg");
+    }
   }
 
   const dedupHash = calculateDedupHash({

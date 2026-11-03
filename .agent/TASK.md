@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### [05.2] Next Feature / Hardening Milestone (Awaiting User Scope)
+### [05.3] Next Feature / Hardening Milestone (Awaiting User Scope)
 
 **Status:** `READY FOR PLANNING`
-**Objective:** `[05.1]` complete and verified. Awaiting user scope for the next feature or explicit release instruction.
+**Objective:** `[05.2]` complete and verified. Awaiting user scope for the next feature or explicit release instruction.
 
 ---
 
@@ -44,6 +44,7 @@
 | [04.3] | VictoriaLogs Canonical NDJSON Logging & Docker Hygiene | [`3f1973b`] | 2026-10-30 |
 | [04.4] | Contract Parity with Services/Brain (Stickers, Base64 Media & Reactions) | [`7a3a131`] | 2026-11-02 |
 | [05.1] | On-Demand Detached Pairing Lifecycle for Standby WWebJS | [`76df80f`] | 2026-11-02 |
+| [05.2] | Inbound Media Buffers, Quoted Context & Retry Circuit Breaker Hardening | [`9d1f700`] | 2026-11-02 |
 
 ---
 
