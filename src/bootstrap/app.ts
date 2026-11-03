@@ -2,6 +2,7 @@ import { createClient } from "redis";
 import type { IWhatsAppDriver } from "../contracts/driver.js";
 import { ensureSecureAuthDirectory } from "../drivers/auth-utils.js";
 import { BaileysDriver } from "../drivers/baileys.js";
+import { DisabledDriver } from "../drivers/disabled.js";
 import { WWebJSDriver } from "../drivers/wwebjs.js";
 import { RedisFencingLock } from "../fsm/fencing.js";
 import { FailoverOrchestrator } from "../fsm/orchestrator.js";
@@ -76,10 +77,12 @@ export class GatewayApplication {
 
     this.standbyDriver =
       options.standbyDriver ??
-      new WWebJSDriver({
-        authDir: this.config.authDirWWebJS,
-        executablePath: this.config.puppeteerExecutablePath,
-      });
+      (this.config.gatewayMode === "baileys_only"
+        ? new DisabledDriver("wwebjs", "Standby engine is disabled by GATEWAY_MODE=baileys_only")
+        : new WWebJSDriver({
+            authDir: this.config.authDirWWebJS,
+            executablePath: this.config.puppeteerExecutablePath,
+          }));
 
     const fencingLock = new RedisFencingLock({
       client: this.redisClient,
@@ -90,6 +93,7 @@ export class GatewayApplication {
       primaryDriver: this.primaryDriver,
       standbyDriver: this.standbyDriver,
       fencingLock,
+      gatewayMode: this.config.gatewayMode,
       circuitBreakerOptions: {
         failureThreshold: this.config.failoverErrorThreshold,
         probeSuccessThreshold: 2,
@@ -162,12 +166,16 @@ export class GatewayApplication {
 
     // INVARIANT: Auth dirs must enforce 0700 permissions to protect multi-device session secrets
     await ensureSecureAuthDirectory(this.config.authDirBaileys);
-    await ensureSecureAuthDirectory(this.config.authDirWWebJS);
+    if (this.config.gatewayMode !== "baileys_only") {
+      await ensureSecureAuthDirectory(this.config.authDirWWebJS);
+    }
 
     await this.connectRedisClients();
     await this.queueManager.start();
     await this.orchestrator.start();
-    this.maintenanceDaemon.start();
+    if (this.config.gatewayMode !== "baileys_only") {
+      this.maintenanceDaemon.start();
+    }
 
     const boundPort = await this.httpServer.start(this.config.port, this.config.host);
 

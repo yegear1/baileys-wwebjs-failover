@@ -57,6 +57,10 @@ export interface FailoverOrchestratorOptions {
    * Default: true if hostConnectivityProbe is provided, false if plain unit test, or true when configured.
    */
   readonly enableHostConnectivityGuard?: boolean;
+  /**
+   * Gateway operation mode: "failover" (default) or "baileys_only".
+   */
+  readonly gatewayMode?: "failover" | "baileys_only" | undefined;
 }
 
 export class FailoverOrchestrator {
@@ -70,6 +74,7 @@ export class FailoverOrchestrator {
   private readonly disableBackgroundProbeTimer: boolean;
   private readonly hostConnectivityProbe: () => Promise<boolean>;
   private readonly enableHostConnectivityGuard: boolean;
+  private readonly gatewayMode: "failover" | "baileys_only";
 
   private state: FailoverState = "PRIMARY_ACTIVE";
   private activeEngine: EngineName | null = "baileys";
@@ -105,6 +110,7 @@ export class FailoverOrchestrator {
     this.enableHostConnectivityGuard =
       options.enableHostConnectivityGuard ?? options.hostConnectivityProbe !== undefined;
     this.hostConnectivityProbe = options.hostConnectivityProbe ?? checkHostConnectivity;
+    this.gatewayMode = options.gatewayMode ?? "failover";
 
     this.setupDriverListeners();
   }
@@ -123,6 +129,14 @@ export class FailoverOrchestrator {
 
   getStandbyDriver(): IWhatsAppDriver {
     return this.standby;
+  }
+
+  getGatewayMode(): "failover" | "baileys_only" {
+    return this.gatewayMode;
+  }
+
+  isStandbyDisabled(): boolean {
+    return this.gatewayMode === "baileys_only" || this.standby.getStatus().state === "DISABLED";
   }
 
   getSnapshot(): FailoverSnapshot {
@@ -224,8 +238,15 @@ export class FailoverOrchestrator {
       this.lastError = error instanceof Error ? error.message : String(error);
       const tripped = this.circuitBreaker.recordFailure(error);
       if (tripped && this.state === "PRIMARY_ACTIVE") {
-        logger.warn({ error }, "Circuit breaker tripped on send failure; initiating failover");
-        void this.triggerFailover("Consecutive send failures exceeded threshold");
+        if (this.isStandbyDisabled()) {
+          logger.warn(
+            { error },
+            "Circuit breaker tripped on send failure; failover is disabled (baileys_only mode)",
+          );
+        } else {
+          logger.warn({ error }, "Circuit breaker tripped on send failure; initiating failover");
+          void this.triggerFailover("Consecutive send failures exceeded threshold");
+        }
       }
       throw error;
     }
@@ -277,6 +298,14 @@ export class FailoverOrchestrator {
    */
   async triggerFailover(reason = "Failover triggered"): Promise<void> {
     if (this.isTransitioning || this.isShuttingDown || this.state === "SHUTDOWN") return;
+
+    if (this.isStandbyDisabled()) {
+      logger.warn(
+        { reason },
+        "Ignoring triggerFailover: failover to standby is disabled (baileys_only mode)",
+      );
+      return;
+    }
 
     if (this.enableHostConnectivityGuard) {
       try {
@@ -340,6 +369,9 @@ export class FailoverOrchestrator {
    * Manual or probe-triggered failback to primary engine via RECOVERY_SWAP.
    */
   async triggerFailback(reason = "Failback triggered"): Promise<void> {
+    if (this.isStandbyDisabled()) {
+      return;
+    }
     if (this.state !== "FALLBACK_ACTIVE" || this.isTransitioning || this.isShuttingDown) {
       return;
     }
@@ -383,6 +415,11 @@ export class FailoverOrchestrator {
    * Enters temporary maintenance keepalive mode (for standby anti-expiration daemon).
    */
   async enterMaintenanceKeepalive(): Promise<void> {
+    if (this.isStandbyDisabled()) {
+      throw new Error(
+        "Cannot enter maintenance keepalive: standby engine is disabled in baileys_only mode",
+      );
+    }
     if (this.state !== "PRIMARY_ACTIVE" || this.isTransitioning) {
       throw new Error(`Cannot enter maintenance keepalive from state ${this.state}`);
     }

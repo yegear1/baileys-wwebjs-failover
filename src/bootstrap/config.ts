@@ -14,9 +14,26 @@ function parseBooleanEnv(defaultValue: boolean) {
     });
 }
 
+export type GatewayMode = "failover" | "baileys_only";
+
 export const GatewayConfigSchema = z
   .object({
     nodeEnv: z.string().default("production"),
+    gatewayMode: z
+      .string()
+      .optional()
+      .transform((val): GatewayMode => {
+        if (!val) return "failover";
+        const normalized = val.trim().toLowerCase();
+        if (
+          normalized === "baileys_only" ||
+          normalized === "baileys-only" ||
+          normalized === "baileys"
+        ) {
+          return "baileys_only";
+        }
+        return "failover";
+      }),
     port: z.coerce.number().int().min(0).max(65535).default(3000),
     host: z.string().default("0.0.0.0"),
     redisUrl: z.string().min(1).default("redis://127.0.0.1:6379"),
@@ -74,6 +91,7 @@ export function loadGatewayConfig(
 ): GatewayConfig {
   return GatewayConfigSchema.parse({
     nodeEnv: env.NODE_ENV,
+    gatewayMode: env.GATEWAY_MODE,
     port: env.PORT,
     host: env.HOST,
     redisUrl: env.REDIS_URL,

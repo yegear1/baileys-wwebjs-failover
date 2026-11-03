@@ -11,7 +11,8 @@ export type EngineState =
   | "STANDBY_READY"
   | "DISCONNECTED"
   | "DEGRADED"
-  | "ERROR";
+  | "ERROR"
+  | "DISABLED";
 
 export interface EngineStatus {
   readonly engine: EngineName;

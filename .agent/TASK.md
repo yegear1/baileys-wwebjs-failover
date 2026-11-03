@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### [06.1] Post-Release Operational Readiness & Production Monitoring
+### [06.1] Configurable GATEWAY_MODE (failover vs baileys_only)
 
-**Status:** `READY FOR PLANNING`
-**Objective:** Define post-release operational observability, alerting dashboards, and production rollout verification for the v0.1.0 release.
+**Status:** `RUNNING`
+**Objective:** Add `GATEWAY_MODE` (`failover` | `baileys_only`) allowing operation with Baileys exclusively, bypassing Puppeteer/Chromium launch, disabling failover circuit breaker, and adapting HTTP observability.
 
 ---
 

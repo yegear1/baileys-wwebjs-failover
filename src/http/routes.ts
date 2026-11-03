@@ -87,6 +87,17 @@ export class RequestRouter {
         }
 
         case "/qr/wwebjs": {
+          if (this.standbyDriver.getStatus().state === "DISABLED") {
+            res.writeHead(404, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                error: "Not Found",
+                message: "Standby engine is disabled by GATEWAY_MODE=baileys_only",
+                status: "DISABLED",
+              }),
+            );
+            return;
+          }
           const qrData = await this.qrService.getQrStatus(this.standbyDriver, {
             allowPairing: this.orchestrator.getState() === "PRIMARY_ACTIVE",
           });
