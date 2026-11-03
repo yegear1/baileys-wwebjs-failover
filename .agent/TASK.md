@@ -7,10 +7,33 @@
 
 ## Active Task
 
-### [05.3] Next Feature / Hardening Milestone (Awaiting User Scope)
+### [05.3] Resilient Failback Orchestration, Circuit Breaker Isolation & Manual Failback API
 
-**Status:** `READY FOR PLANNING`
-**Objective:** `[05.2]` complete and verified. Awaiting user scope for the next feature or explicit release instruction.
+**Status:** `DONE`
+**Objective:** Resolve failback lockup where outbound dispatches during `FALLBACK_ACTIVE` incorrectly reset the primary circuit breaker, decouple silent probe stability verification from circuit breaker state, and expose a dedicated administrative `POST /failback` HTTP route.
+
+**Systems Involved:** `src/fsm/orchestrator.ts`, `src/fsm/circuit-breaker.ts`, `src/http/server.ts`, `tests/`
+
+#### Key Deliverables:
+1. **Primary Circuit Breaker Isolation:**
+   - In `FailoverOrchestrator.sendMessage()`, only record circuit breaker successes (`recordSuccess()`) when `currentDriver.name === "baileys"`.
+   - Prevent successful dispatches by standby engine (`wwebjs`) in `FALLBACK_ACTIVE` from prematurely resetting the primary circuit breaker to `CLOSED`.
+2. **Deterministic Silent Probe Stability Verification:**
+   - Decouple failback trigger in `executeSilentProbe()` so that consecutive successful health probes on primary driver reliably trigger recovery swap (`triggerFailback`) after N consecutive successes (default: 3 probes, 30s) regardless of whether circuit breaker was reset.
+3. **Administrative Manual Failback Endpoint:**
+   - Expose `POST /failback` on Gateway HTTP server (`src/http/server.ts`).
+   - Validates that primary is healthy/connected, initiates `triggerFailback("Manual failback requested via HTTP endpoint")`, and returns transition status. If primary is disconnected/unpaired, returns `409 Conflict`.
+4. **Hermetic Test Coverage:**
+   - Vitest suite in `tests/fsm-failback.test.ts` or `tests/orchestrator.test.ts` verifying:
+     - Dispatches in `FALLBACK_ACTIVE` do not mutate primary circuit breaker.
+     - Silent probe stability count triggers automatic `triggerFailback`.
+     - `POST /failback` initiates manual recovery swap and returns appropriate HTTP status codes.
+
+#### Acceptance Criteria:
+- [ ] `pnpm test` exits 0 (all unit & integration tests pass).
+- [ ] `pnpm run lint` exits 0 (zero biome diagnostics).
+- [ ] `pnpm run build` exits 0 (zero TypeScript strict errors).
+- [ ] `git diff --check` exits 0.
 
 ---
 
@@ -45,6 +68,7 @@
 | [04.4] | Contract Parity with Services/Brain (Stickers, Base64 Media & Reactions) | [`7a3a131`] | 2026-11-02 |
 | [05.1] | On-Demand Detached Pairing Lifecycle for Standby WWebJS | [`76df80f`] | 2026-11-02 |
 | [05.2] | Inbound Media Buffers, Quoted Context & Retry Circuit Breaker Hardening | [`9d1f700`] | 2026-11-02 |
+| [05.3] | Resilient Failback Orchestration, Circuit Breaker Isolation & Manual Failback API | [`b8c5a01`] | 2026-11-02 |
 
 ---
 
