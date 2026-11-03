@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### [06.1] Configurable GATEWAY_MODE (failover vs baileys_only)
+### [06.2] Operational Observability & Production Rollout Verification
 
-**Status:** `RUNNING`
-**Objective:** Add `GATEWAY_MODE` (`failover` | `baileys_only`) allowing operation with Baileys exclusively, bypassing Puppeteer/Chromium launch, disabling failover circuit breaker, and adapting HTTP observability.
+**Status:** `READY FOR PLANNING`
+**Objective:** Define post-release operational observability, alerting dashboards, and production rollout verification.
 
 ---
 
@@ -18,6 +18,7 @@
 
 | Task | Title | Commit(s) | Date |
 |---|---|---|---|
+| [06.1] | Configurable GATEWAY_MODE (failover vs baileys_only) | [`e201c97`](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/e201c97) | 2026-11-03 |
 | *(Archived)* | Tasks [00.0] through [05.3] archived to [`.agent/ARCHIVE.md`](ARCHIVE.md) under `[v0.1.0]` | [`c2b22c8`](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/c2b22c8) | 2026-11-02 |
 
 ---
