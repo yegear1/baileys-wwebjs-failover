@@ -137,6 +137,9 @@ docker compose up -d
 curl -s http://127.0.0.1:3000/health
 curl -s http://127.0.0.1:3000/metrics
 
+# Failback manual para o Baileys (202 em sucesso, 409 se o primário estiver desconectado ou sem fallback ativo)
+curl -s -X POST http://127.0.0.1:3000/failback
+
 # Acompanhar logs do gateway
 docker compose logs -f gateway
 ```

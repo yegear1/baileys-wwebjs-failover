@@ -23,6 +23,10 @@ interface BufferedOutboundItem {
   reject: (err: unknown) => void;
 }
 
+export type ManualFailbackResult =
+  | { readonly ok: true; readonly state: FailoverState }
+  | { readonly ok: false; readonly reason: string; readonly state: FailoverState };
+
 export interface FailoverOrchestratorOptions {
   readonly primaryDriver: IWhatsAppDriver;
   readonly standbyDriver: IWhatsAppDriver;
@@ -62,6 +66,7 @@ export class FailoverOrchestrator {
   private readonly circuitBreaker: CircuitBreaker;
   private readonly probeIntervalMs: number;
   private readonly probeTimeoutMs: number;
+  private readonly probeSuccessThreshold: number;
   private readonly disableBackgroundProbeTimer: boolean;
   private readonly hostConnectivityProbe: () => Promise<boolean>;
   private readonly enableHostConnectivityGuard: boolean;
@@ -85,6 +90,7 @@ export class FailoverOrchestrator {
   private probeTimer: ReturnType<typeof setInterval> | undefined = undefined;
   private isTransitioning = false;
   private isProbing = false;
+  private consecutiveProbeSuccesses = 0;
   private isShuttingDown = false;
 
   constructor(options: FailoverOrchestratorOptions) {
@@ -94,6 +100,7 @@ export class FailoverOrchestrator {
     this.circuitBreaker = new CircuitBreaker(options.circuitBreakerOptions);
     this.probeIntervalMs = options.probeIntervalMs ?? 10_000;
     this.probeTimeoutMs = options.probeTimeoutMs ?? 5_000;
+    this.probeSuccessThreshold = options.circuitBreakerOptions?.probeSuccessThreshold ?? 3;
     this.disableBackgroundProbeTimer = options.disableBackgroundProbeTimer ?? false;
     this.enableHostConnectivityGuard =
       options.enableHostConnectivityGuard ?? options.hostConnectivityProbe !== undefined;
@@ -206,7 +213,11 @@ export class FailoverOrchestrator {
     try {
       const receipt = await currentDriver.sendMessage(to, content);
       this.lastEngineLatencySeconds[currentDriver.name] = (Date.now() - startTime) / 1000;
-      this.circuitBreaker.recordSuccess();
+      // INVARIANT: Only primary dispatches may touch the primary circuit breaker; standby
+      // successes during FALLBACK_ACTIVE would otherwise reset it and lock out failback.
+      if (currentDriver.name === "baileys") {
+        this.circuitBreaker.recordSuccess();
+      }
       return receipt;
     } catch (error) {
       this.lastEngineLatencySeconds[currentDriver.name] = (Date.now() - startTime) / 1000;
@@ -314,6 +325,7 @@ export class FailoverOrchestrator {
       await this.flushOutboundBuffer();
 
       // Start silent probe failback loop
+      this.consecutiveProbeSuccesses = 0;
       this.startSilentProbeLoop();
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
@@ -395,6 +407,40 @@ export class FailoverOrchestrator {
   }
 
   /**
+   * Counts a successful probe and triggers failback after N consecutive successes.
+   *
+   * INVARIANT: Stability is tracked by an orchestrator-owned counter, independent of circuit
+   * breaker state, so failback cannot be starved by an already-CLOSED breaker.
+   */
+  private registerProbeSuccess(message: string): void {
+    this.circuitBreaker.recordSuccess();
+    this.consecutiveProbeSuccesses += 1;
+    logger.info({ probeSuccesses: this.consecutiveProbeSuccesses }, message);
+    if (this.consecutiveProbeSuccesses < this.probeSuccessThreshold) return;
+    this.consecutiveProbeSuccesses = 0;
+    logger.info("Silent probe confirmed primary stability; initiating recovery swap");
+    void this.triggerFailback("Silent probe verified primary stability");
+  }
+
+  /**
+   * Administrative failback request. Succeeds only when standby is active and primary is connected.
+   */
+  async requestManualFailback(): Promise<ManualFailbackResult> {
+    if (this.state !== "FALLBACK_ACTIVE" || this.isTransitioning || this.isShuttingDown) {
+      return {
+        ok: false,
+        reason: `Failback not available in state ${this.state}`,
+        state: this.state,
+      };
+    }
+    if (!this.primary.getStatus().connected) {
+      return { ok: false, reason: "Primary engine is not connected", state: this.state };
+    }
+    await this.triggerFailback("Manual failback requested via HTTP endpoint");
+    return { ok: true, state: this.state };
+  }
+
+  /**
    * Executes a single silent probe against primary driver.
    * Returns true if the probe succeeds.
    */
@@ -408,15 +454,7 @@ export class FailoverOrchestrator {
       // INVARIANT: Inspect existing primary connection state before attempting reconnection
       const currentStatus = this.primary.getStatus();
       if (currentStatus.connected) {
-        const recovered = this.circuitBreaker.recordSuccess();
-        logger.info(
-          { probeSuccesses: this.circuitBreaker.getProbeSuccesses() },
-          "Silent probe confirmed already-connected primary stability",
-        );
-        if (recovered) {
-          logger.info("Silent probe confirmed primary stability; initiating recovery swap");
-          void this.triggerFailback("Silent probe verified primary stability");
-        }
+        this.registerProbeSuccess("Silent probe confirmed already-connected primary stability");
         return true;
       }
 
@@ -431,26 +469,20 @@ export class FailoverOrchestrator {
       const connected = await this.waitForPrimaryConnected(connectPromise);
 
       if (connected) {
-        const recovered = this.circuitBreaker.recordSuccess();
-        logger.info(
-          { probeSuccesses: this.circuitBreaker.getProbeSuccesses() },
-          "Silent probe to primary succeeded",
-        );
-        if (recovered) {
-          logger.info("Silent probe confirmed primary stability; initiating recovery swap");
-          void this.triggerFailback("Silent probe verified primary stability");
-        }
+        this.registerProbeSuccess("Silent probe to primary succeeded");
         return true;
       }
 
       // Probe failed or timed out: safely teardown probe sockets to prevent leaks,
       // unless primary transitioned to PAIRING_QR_READY awaiting operator QR scan.
+      this.consecutiveProbeSuccesses = 0;
       this.circuitBreaker.recordFailure("Primary status not connected during probe");
       if (this.primary.getStatus().state !== "PAIRING_QR_READY") {
         await this.disconnectPrimarySafely();
       }
       return false;
     } catch (error) {
+      this.consecutiveProbeSuccesses = 0;
       this.circuitBreaker.recordFailure(error);
       await this.disconnectPrimarySafely();
       return false;

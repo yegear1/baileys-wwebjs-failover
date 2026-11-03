@@ -42,11 +42,16 @@ export class RequestRouter {
     // Enforce JSON content type and CORS baseline for observability clients
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 
     if (method === "OPTIONS") {
       res.writeHead(204);
       res.end();
+      return;
+    }
+
+    if (method === "POST" && path === "/failback") {
+      await this.handleFailback(res);
       return;
     }
 
@@ -96,6 +101,22 @@ export class RequestRouter {
           return;
         }
       }
+    } catch (err) {
+      res.writeHead(500);
+      res.end(
+        JSON.stringify({
+          error: "Internal Server Error",
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
+  }
+
+  private async handleFailback(res: ServerResponse): Promise<void> {
+    try {
+      const result = await this.orchestrator.requestManualFailback();
+      res.writeHead(result.ok ? 202 : 409);
+      res.end(JSON.stringify(result));
     } catch (err) {
       res.writeHead(500);
       res.end(
