@@ -120,3 +120,47 @@ type: architectural-decision-log
   - *Relying solely on `client.destroy()` without process tree kill:* Rejected as Chromium browser processes occasionally linger in orphan state.
 - **Consequences:**
   - Docker Compose configuration and container images require explicit `init: true` and appropriate volume/flag configurations.
+
+---
+
+### [2026-10-30] Multi-Tier Outbound Queuing, Anti-Ban Jitter Delays, and Typing Presence
+
+- **Context:**
+  - Automated outbound messaging without human-like cadence or typing presence is vulnerable to anti-abuse heuristics on WhatsApp, causing rapid account flags.
+  - High-priority transactional alerts must not be starved behind large marketing or informational broadcasts.
+- **Decision:**
+  - Segregate outbound traffic into two Redis queues: `whatsapp:send:priority` and `whatsapp:send:low`.
+  - The outbound worker drains `whatsapp:send:priority` strictly before `whatsapp:send:low` using a sequential non-blocking check before falling back to blocking `BLPOP`.
+  - Enforce tiered random dispatch delays: `urgent` (300–800ms), `normal` (1500–3500ms), and `low` (10000–20000ms).
+  - Prepend text dispatches with simulated `composing` typing presence scaled proportionally to message length before socket send.
+- **Consequences:**
+  - Outbound latency is intentionally introduced for lower-priority messages to safeguard phone line longevity.
+
+---
+
+### [2026-11-02] On-Demand Detached Pairing Lifecycle for Standby WWebJS
+
+- **Context:**
+  - WhatsApp-Web.js requires pairing via browser QR code, but keeping Chromium booted 24/7 consumes 500+ MB RAM continuously.
+  - Initial pairing and post-logout re-pairing must happen without switching the active engine or disrupting live Baileys traffic.
+- **Decision:**
+  - Trigger WWebJS pairing on-demand only when an operator hits `GET /qr/wwebjs` and the engine is dormant (`DISCONNECTED`/`UNPAIRED`).
+  - Boot Chromium in an isolated detached pairing mode, stream QR data, await authentication, persist credentials to `/data/auth/wwebjs`, and immediately call `client.destroy()` and SIGKILL to release RAM once credentials are safe (`STANDBY_READY`).
+  - Enforce a 3-minute pairing timeout to auto-kill abandoned pairing sessions.
+- **Consequences:**
+  - Operators can pair the standby companion device at any time without triggering a failover switch or keeping Chromium resident in memory.
+
+---
+
+### [2026-11-02] Resilient Failback Orchestration, Circuit Breaker Isolation, and Manual Failback API
+
+- **Context:**
+  - While running in `FALLBACK_ACTIVE`, outbound message dispatches via standby WWebJS should not prematurely reset the primary engine's circuit breaker failure count.
+  - Automatic failback must rely strictly on continuous silent probe stability on the primary socket rather than outbound driver dispatches.
+  - Operators require an administrative mechanism to force an immediate recovery swap to primary once network conditions normalize.
+- **Decision:**
+  - In `FailoverOrchestrator.sendMessage()`, strictly isolate `circuitBreaker.recordSuccess()` to primary driver dispatches (`currentDriver.name === "baileys"`).
+  - In `executeSilentProbe()`, track continuous probe stability independently and trigger `triggerFailback()` after $N$ consecutive successful health probes regardless of circuit breaker state.
+  - Expose `POST /failback` on the Gateway HTTP server. If primary is connected/ready, initiate an immediate transition from `FALLBACK_ACTIVE` to `RECOVERY_SWAP` (returning HTTP 202 Accepted); if primary is not connected, reject with HTTP 409 Conflict.
+- **Consequences:**
+  - Outbound traffic during fallback mode does not interfere with primary breaker metrics, and failback is guaranteed to trigger automatically or manually on demand.
