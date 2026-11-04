@@ -52,4 +52,13 @@ export interface IWhatsAppDriver {
    * Resolves once the first QR is available, the session authenticates, or pairing fails.
    */
   requestPairing?(): Promise<void>;
+  /**
+   * Proactively heals a desynchronized Signal session ratchet and pre-key bundle for a participant.
+   */
+  healSignalSession?(
+    targetJid: string,
+    remoteJid?: string,
+    reason?: string,
+    msgId?: string,
+  ): Promise<boolean>;
 }

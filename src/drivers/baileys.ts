@@ -5,7 +5,8 @@ import makeWASocket, {
   type ConnectionState,
   DisconnectReason,
   downloadMediaMessage,
-  type proto,
+  jidDecode,
+  proto,
   type UserFacingSocketConfig,
   useMultiFileAuthState,
   type WAMessage,
@@ -64,6 +65,14 @@ export class BoundedRetryCounterCache implements CacheStore {
     if (entry && entry.count < this.maxRetries) {
       this.store.delete(key);
     }
+  }
+
+  /**
+   * Forcefully delete retry counter even if maxRetries was reached.
+   * Used by self-healing mechanisms after session repair.
+   */
+  forceDel(key: string): void {
+    this.store.delete(key);
   }
 
   clear(): void {
@@ -130,6 +139,16 @@ export interface BaileysDriverOptions {
    * Optional custom retry counter cache.
    */
   readonly retryCounterCache?: CacheStore;
+  /**
+   * Whether to automatically heal corrupted Signal sessions and pre-keys upon decryption failure.
+   * Default: true.
+   */
+  readonly autoHealSignalSessions?: boolean;
+  /**
+   * Cooldown in milliseconds between successive healing attempts for the same session ID.
+   * Default: 5,000 ms.
+   */
+  readonly sessionHealCooldownMs?: number;
 }
 
 export class BaileysSendTimeoutError extends Error {
@@ -174,9 +193,13 @@ export class BaileysDriver implements IWhatsAppDriver {
   private readonly maxMsgRetryCount: number;
   private readonly maxStoredMessages: number;
   private readonly retryCounterCache: CacheStore;
+  private readonly autoHealSignalSessions: boolean;
+  private readonly sessionHealCooldownMs: number;
+  private readonly recentSessionHeals = new Map<string, number>();
   private readonly messageStore = new Map<string, { message: proto.IMessage; remoteJid: string }>();
 
   private socket: WASocket | null = null;
+  private authState: AuthenticationState | null = null;
   private qrCode: string | undefined = undefined;
   private status: EngineStatus = {
     engine: "baileys",
@@ -210,6 +233,8 @@ export class BaileysDriver implements IWhatsAppDriver {
     this.maxMediaDownloadSizeBytes = options.maxMediaDownloadSizeBytes ?? 16 * 1024 * 1024;
     this.maxMsgRetryCount = options.maxMsgRetryCount ?? 3;
     this.maxStoredMessages = options.maxStoredMessages ?? 1000;
+    this.autoHealSignalSessions = options.autoHealSignalSessions ?? true;
+    this.sessionHealCooldownMs = options.sessionHealCooldownMs ?? 5000;
     this.retryCounterCache =
       options.retryCounterCache ??
       new BoundedRetryCounterCache({ maxRetries: this.maxMsgRetryCount });
@@ -282,6 +307,7 @@ export class BaileysDriver implements IWhatsAppDriver {
     ensureSecureAuthDirectory(this.authDir);
 
     const { state, saveCreds } = await this.authStateLoader(this.authDir);
+    this.authState = state;
 
     this.updateStatus({
       engine: "baileys",
@@ -319,6 +345,8 @@ export class BaileysDriver implements IWhatsAppDriver {
     this.isIntentionalDisconnect = true;
     this.clearReconnectTimer();
     this.reconnectAttempt = 0;
+    this.authState = null;
+    this.recentSessionHeals.clear();
 
     if (this.socket) {
       try {
@@ -475,6 +503,8 @@ export class BaileysDriver implements IWhatsAppDriver {
     const errorMessage = error instanceof Error ? error.message : undefined;
 
     if (isLoggedOut && this.autoPurgeOnLogout) {
+      this.authState = null;
+      this.recentSessionHeals.clear();
       this.logger.warn(
         { authDir: this.authDir, statusCode },
         "Baileys companion device logged out (401); purging invalidated auth state",
@@ -713,6 +743,16 @@ export class BaileysDriver implements IWhatsAppDriver {
         this.storeMessage(webMsg.key.id, webMsg.key.remoteJid ?? "", webMsg.message);
       }
 
+      // INVARIANT: Proactively heal corrupted Signal sessions and pre-keys upon decryption failure stubs
+      // (CIPHERTEXT stub type) to prevent infinite silent message drop loops.
+      if (
+        this.autoHealSignalSessions &&
+        webMsg.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT
+      ) {
+        await this.handleDecryptionFailure(webMsg);
+        continue;
+      }
+
       if (this.messageHandlers.size === 0) continue;
 
       const inbound = mapBaileysMessageToInbound(webMsg, selfJid);
@@ -739,6 +779,123 @@ export class BaileysDriver implements IWhatsAppDriver {
         }
       }
     }
+  }
+
+  /**
+   * Proactively heals a desynchronized Signal session ratchet and pre-key bundle for a participant.
+   * Invalidates stale session and sender-key state in authState.keys without requiring full companion re-login.
+   */
+  public async healSignalSession(
+    targetJid: string,
+    remoteJid?: string,
+    reason = "Decryption failure",
+    msgId?: string,
+  ): Promise<boolean> {
+    if (!this.authState) {
+      this.logger.debug({ targetJid }, "Cannot heal Signal session: authState not loaded");
+      return false;
+    }
+
+    const decoded = jidDecode(targetJid);
+    if (!decoded?.user) {
+      this.logger.debug({ targetJid }, "Cannot heal Signal session: failed to decode JID");
+      return false;
+    }
+
+    const sessionId = `${decoded.user}.${decoded.device || 0}`;
+    const now = Date.now();
+    const lastHeal = this.recentSessionHeals.get(sessionId) ?? 0;
+    if (now - lastHeal < this.sessionHealCooldownMs) {
+      this.logger.debug(
+        { sessionId, targetJid, reason },
+        "Skipping duplicate Signal session heal within cooldown window",
+      );
+      return false;
+    }
+
+    this.recentSessionHeals.set(sessionId, now);
+    if (this.recentSessionHeals.size > 1000) {
+      for (const [key, ts] of this.recentSessionHeals.entries()) {
+        if (now - ts > this.sessionHealCooldownMs) {
+          this.recentSessionHeals.delete(key);
+        }
+      }
+    }
+
+    // Invalidate stale Signal direct session ratchet keys
+    try {
+      await this.authState.keys.set({ session: { [sessionId]: null } });
+    } catch (err) {
+      this.logger.error({ err, sessionId }, "Failed to evict stale Signal session key");
+    }
+
+    // Invalidate sender key if group message
+    const isGroup =
+      (remoteJid && remoteJid.endsWith("@g.us")) ||
+      (remoteJid && remoteJid !== targetJid);
+    if (isGroup && remoteJid) {
+      const senderKeyId = `${remoteJid}::${decoded.user}::${decoded.device || 0}`;
+      try {
+        await this.authState.keys.set({ "sender-key": { [senderKeyId]: null } });
+      } catch (err) {
+        this.logger.error({ err, senderKeyId }, "Failed to evict stale Signal sender key");
+      }
+    }
+
+    // Unlock retry cache for this message to prevent permanent silence
+    if (msgId) {
+      if (
+        "forceDel" in this.retryCounterCache &&
+        typeof (this.retryCounterCache as { forceDel: (k: string) => void }).forceDel === "function"
+      ) {
+        (this.retryCounterCache as { forceDel: (k: string) => void }).forceDel(msgId);
+      } else {
+        this.retryCounterCache.del(msgId);
+      }
+    }
+
+    // Pre-Key replenishment if pre-key error detected
+    if (/pre[-]?key|missing_keys|bundle not found/i.test(reason)) {
+      try {
+        const sock = this.socket as (WASocket & {
+          uploadPreKeysToServerIfRequired?: () => Promise<void>;
+          uploadPreKeys?: (count?: number) => Promise<void>;
+        }) | null;
+        if (sock && typeof sock.uploadPreKeysToServerIfRequired === "function") {
+          await sock.uploadPreKeysToServerIfRequired();
+        } else if (sock && typeof sock.uploadPreKeys === "function") {
+          await sock.uploadPreKeys(50);
+        }
+      } catch (err) {
+        this.logger.warn({ err }, "Failed to replenish pre-keys during Signal self-healing");
+      }
+    }
+
+    this.logger.warn(
+      {
+        remoteJid: remoteJid ?? targetJid,
+        targetJid,
+        sessionId,
+        reason,
+        msgId,
+      },
+      "Signal session desynchronization detected; self-healed session keys",
+    );
+
+    return true;
+  }
+
+  private async handleDecryptionFailure(webMsg: proto.IWebMessageInfo): Promise<void> {
+    const stubError = webMsg.messageStubParameters?.[0] ?? "Decryption failure";
+    const remoteJid = webMsg.key.remoteJid ?? "";
+    const participant = webMsg.key.participant ?? undefined;
+    const targetJid = participant ?? remoteJid;
+
+    if (!targetJid) {
+      return;
+    }
+
+    await this.healSignalSession(targetJid, remoteJid, stubError, webMsg.key.id ?? undefined);
   }
 
   private normalizeJid(recipient: string): string {

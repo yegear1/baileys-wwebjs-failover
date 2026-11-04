@@ -2,10 +2,11 @@ import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  AuthenticationState,
-  UserFacingSocketConfig,
-  WASocket,
+import {
+  type AuthenticationState,
+  proto,
+  type UserFacingSocketConfig,
+  type WASocket,
 } from "@whiskeysockets/baileys";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -30,6 +31,7 @@ function createMockSocket(): {
   ev: MockSocketEventEmitter;
   sendMessageMock: ReturnType<typeof vi.fn>;
   sendPresenceUpdateMock: ReturnType<typeof vi.fn>;
+  uploadPreKeysMock: ReturnType<typeof vi.fn>;
   endMock: ReturnType<typeof vi.fn>;
 } {
   const ev = new MockSocketEventEmitter();
@@ -37,6 +39,7 @@ function createMockSocket(): {
     key: { id: "mock-wa-msg-id" },
   });
   const sendPresenceUpdateMock = vi.fn().mockResolvedValue(undefined);
+  const uploadPreKeysMock = vi.fn().mockResolvedValue(undefined);
   const endMock = vi.fn();
 
   const sock = {
@@ -44,10 +47,12 @@ function createMockSocket(): {
     user: { id: "bot-user:1@s.whatsapp.net" },
     sendMessage: sendMessageMock,
     sendPresenceUpdate: sendPresenceUpdateMock,
+    uploadPreKeysToServerIfRequired: uploadPreKeysMock,
+    uploadPreKeys: uploadPreKeysMock,
     end: endMock,
   } as unknown as WASocket;
 
-  return { sock, ev, sendMessageMock, sendPresenceUpdateMock, endMock };
+  return { sock, ev, sendMessageMock, sendPresenceUpdateMock, uploadPreKeysMock, endMock };
 }
 
 describe("ensureSecureAuthDirectory & purgeAuthDirectory", () => {
@@ -913,6 +918,347 @@ describe("BaileysDriver", () => {
           id: "AC7E4D5CA9D30649B95CF1340EB8D5DB",
         });
         expect(retrieved?.conversation).toBe("!dl https://example.com/video");
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("Signal Decryption Healing & Session Recovery", () => {
+    it("detects CIPHERTEXT stub with Bad MAC and evicts direct session key", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-test-"));
+      const authDir = join(tempParent, "baileys-test");
+      const { sock, ev } = createMockSocket();
+
+      const keysSetMock = vi.fn().mockResolvedValue(undefined);
+      const mockAuthState = {
+        creds: {},
+        keys: {
+          get: vi.fn().mockResolvedValue({}),
+          set: keysSetMock,
+        },
+      } as unknown as AuthenticationState;
+
+      const driver = new BaileysDriver({
+        authDir,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: mockAuthState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      const messageHandler = vi.fn();
+      driver.onMessage(messageHandler);
+
+      try {
+        await driver.connect();
+
+        const cipherStub = {
+          key: {
+            id: "msg-bad-mac-1",
+            remoteJid: "5511999998888@s.whatsapp.net",
+            fromMe: false,
+          },
+          messageTimestamp: 1700000000,
+          messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT,
+          messageStubParameters: ["Bad MAC"],
+        };
+
+        ev.emit("messages.upsert", {
+          messages: [cipherStub],
+          type: "notify",
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        expect(keysSetMock).toHaveBeenCalledWith({
+          session: {
+            "5511999998888.0": null,
+          },
+        });
+        expect(messageHandler).not.toHaveBeenCalled();
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+
+    it("detects group message decryption failure and evicts both session and sender-key", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-test-"));
+      const authDir = join(tempParent, "baileys-test");
+      const { sock, ev } = createMockSocket();
+
+      const keysSetMock = vi.fn().mockResolvedValue(undefined);
+      const mockAuthState = {
+        creds: {},
+        keys: {
+          get: vi.fn().mockResolvedValue({}),
+          set: keysSetMock,
+        },
+      } as unknown as AuthenticationState;
+
+      const driver = new BaileysDriver({
+        authDir,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: mockAuthState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      try {
+        await driver.connect();
+
+        const groupStub = {
+          key: {
+            id: "grp-fail-1",
+            remoteJid: "120363000000000000@g.us",
+            participant: "5511888887777:2@s.whatsapp.net",
+            fromMe: false,
+          },
+          messageTimestamp: 1700000000,
+          messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT,
+          messageStubParameters: ["SessionError: failed to decrypt"],
+        };
+
+        ev.emit("messages.upsert", {
+          messages: [groupStub],
+          type: "notify",
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        expect(keysSetMock).toHaveBeenCalledWith({
+          session: {
+            "5511888887777.2": null,
+          },
+        });
+        expect(keysSetMock).toHaveBeenCalledWith({
+          "sender-key": {
+            "120363000000000000@g.us::5511888887777::2": null,
+          },
+        });
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+
+    it("replenishes pre-keys when decryption stub contains prekey error", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-test-"));
+      const authDir = join(tempParent, "baileys-test");
+      const { sock, ev, uploadPreKeysMock } = createMockSocket();
+
+      const keysSetMock = vi.fn().mockResolvedValue(undefined);
+      const mockAuthState = {
+        creds: {},
+        keys: {
+          get: vi.fn().mockResolvedValue({}),
+          set: keysSetMock,
+        },
+      } as unknown as AuthenticationState;
+
+      const driver = new BaileysDriver({
+        authDir,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: mockAuthState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      try {
+        await driver.connect();
+
+        const preKeyStub = {
+          key: {
+            id: "prekey-fail-1",
+            remoteJid: "5511777776666@s.whatsapp.net",
+            fromMe: false,
+          },
+          messageTimestamp: 1700000000,
+          messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT,
+          messageStubParameters: ["PreKey bundle not found for recipient"],
+        };
+
+        ev.emit("messages.upsert", {
+          messages: [preKeyStub],
+          type: "notify",
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        expect(keysSetMock).toHaveBeenCalledWith({
+          session: {
+            "5511777776666.0": null,
+          },
+        });
+        expect(uploadPreKeysMock).toHaveBeenCalled();
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+
+    it("debounces consecutive failures for the same sessionId within cooldown window", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-test-"));
+      const authDir = join(tempParent, "baileys-test");
+      const { sock, ev } = createMockSocket();
+
+      const keysSetMock = vi.fn().mockResolvedValue(undefined);
+      const mockAuthState = {
+        creds: {},
+        keys: {
+          get: vi.fn().mockResolvedValue({}),
+          set: keysSetMock,
+        },
+      } as unknown as AuthenticationState;
+
+      const driver = new BaileysDriver({
+        authDir,
+        sessionHealCooldownMs: 5000,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: mockAuthState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      try {
+        await driver.connect();
+
+        const stub1 = {
+          key: { id: "burst-1", remoteJid: "5511999998888@s.whatsapp.net", fromMe: false },
+          messageTimestamp: 1700000000,
+          messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT,
+          messageStubParameters: ["Bad MAC"],
+        };
+        const stub2 = {
+          key: { id: "burst-2", remoteJid: "5511999998888@s.whatsapp.net", fromMe: false },
+          messageTimestamp: 1700000001,
+          messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT,
+          messageStubParameters: ["Bad MAC"],
+        };
+
+        ev.emit("messages.upsert", { messages: [stub1, stub2], type: "notify" });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        // Exactly one session eviction should have happened
+        expect(keysSetMock).toHaveBeenCalledTimes(1);
+        expect(keysSetMock).toHaveBeenCalledWith({
+          session: {
+            "5511999998888.0": null,
+          },
+        });
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+
+    it("unlocks retryCounterCache entry upon self-healing", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-test-"));
+      const authDir = join(tempParent, "baileys-test");
+      const { sock, ev } = createMockSocket();
+
+      const retryCache = new BoundedRetryCounterCache({ maxRetries: 3 });
+      retryCache.set("locked-msg-123", 3);
+      // Standard del() preserves locked counter
+      retryCache.del("locked-msg-123");
+      expect(retryCache.get("locked-msg-123")).toBe(3);
+
+      const keysSetMock = vi.fn().mockResolvedValue(undefined);
+      const mockAuthState = {
+        creds: {},
+        keys: {
+          get: vi.fn().mockResolvedValue({}),
+          set: keysSetMock,
+        },
+      } as unknown as AuthenticationState;
+
+      const driver = new BaileysDriver({
+        authDir,
+        retryCounterCache: retryCache,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: mockAuthState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      try {
+        await driver.connect();
+
+        const stub = {
+          key: { id: "locked-msg-123", remoteJid: "5511999998888@s.whatsapp.net", fromMe: false },
+          messageTimestamp: 1700000000,
+          messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT,
+          messageStubParameters: ["Bad MAC"],
+        };
+
+        ev.emit("messages.upsert", { messages: [stub], type: "notify" });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        // Self healing forceDel unlocked the cache
+        expect(retryCache.get("locked-msg-123")).toBeUndefined();
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+
+    it("does not heal when autoHealSignalSessions is disabled", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-test-"));
+      const authDir = join(tempParent, "baileys-test");
+      const { sock, ev } = createMockSocket();
+
+      const keysSetMock = vi.fn().mockResolvedValue(undefined);
+      const mockAuthState = {
+        creds: {},
+        keys: {
+          get: vi.fn().mockResolvedValue({}),
+          set: keysSetMock,
+        },
+      } as unknown as AuthenticationState;
+
+      const driver = new BaileysDriver({
+        authDir,
+        autoHealSignalSessions: false,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: mockAuthState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      try {
+        await driver.connect();
+
+        const cipherStub = {
+          key: { id: "msg-bad-mac-2", remoteJid: "5511999998888@s.whatsapp.net", fromMe: false },
+          messageTimestamp: 1700000000,
+          messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT,
+          messageStubParameters: ["Bad MAC"],
+        };
+
+        ev.emit("messages.upsert", { messages: [cipherStub], type: "notify" });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        expect(keysSetMock).not.toHaveBeenCalled();
       } finally {
         await driver.disconnect();
         rmSync(tempParent, { recursive: true, force: true });
