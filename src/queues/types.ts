@@ -25,6 +25,8 @@ export const DEFAULT_NORMAL_DELAY_MIN_MS = 1500;
 export const DEFAULT_NORMAL_DELAY_MAX_MS = 3500;
 export const DEFAULT_LOW_DELAY_MIN_MS = 10000;
 export const DEFAULT_LOW_DELAY_MAX_MS = 20000;
+export const DEFAULT_REACT_JITTER_MIN_MS = 350;
+export const DEFAULT_REACT_JITTER_MAX_MS = 700;
 
 export const OutboundPrioritySchema = z.enum(["urgent", "normal", "low"]);
 export type OutboundPriority = z.infer<typeof OutboundPrioritySchema>;

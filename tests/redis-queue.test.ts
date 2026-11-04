@@ -487,6 +487,51 @@ describe("normalizeOutboundPayload", () => {
     expect(normalized.content.type).toBe("image");
     expect(normalized.content.media?.digest).toBe("abcd1234digest");
   });
+
+  it("infers video type from video/* MIME type or .mp4 URL extension", () => {
+    const fromMime = normalizeOutboundPayload({
+      phone_number: "5511999998888@c.us",
+      media_base64: "dGVzdA==",
+      media_mimetype: "video/mp4",
+      content: "Video caption",
+    });
+    expect(fromMime.content.type).toBe("video");
+    expect(fromMime.content.media?.mimeType).toBe("video/mp4");
+    expect(fromMime.content.media?.caption).toBe("Video caption");
+
+    const fromUrl = normalizeOutboundPayload({
+      phone_number: "5511999998888@c.us",
+      media_url: "https://cdn.example.com/videos/test.mp4?token=123",
+    });
+    expect(fromUrl.content.type).toBe("video");
+    expect(fromUrl.content.media?.mimeType).toBe("video/mp4");
+  });
+
+  it("infers audio type from audio/* MIME type or .ogg/.mp3 URL extension", () => {
+    const fromMime = normalizeOutboundPayload({
+      phone_number: "5511999998888@c.us",
+      media_base64: "dGVzdA==",
+      media_mimetype: "audio/ogg; codecs=opus",
+    });
+    expect(fromMime.content.type).toBe("audio");
+    expect(fromMime.content.media?.mimeType).toBe("audio/ogg; codecs=opus");
+
+    const fromUrl = normalizeOutboundPayload({
+      phone_number: "5511999998888@c.us",
+      media_url: "https://cdn.example.com/audios/voice.mp3",
+    });
+    expect(fromUrl.content.type).toBe("audio");
+    expect(fromUrl.content.media?.mimeType).toBe("audio/ogg");
+  });
+
+  it("forces document type when send_as_document is true regardless of media type", () => {
+    const docVideo = normalizeOutboundPayload({
+      phone_number: "5511999998888@c.us",
+      media_url: "https://cdn.example.com/video.mp4",
+      send_as_document: true,
+    });
+    expect(docVideo.content.type).toBe("document");
+  });
 });
 
 describe("RedisOutboundWorker & Failover Backpressure", () => {

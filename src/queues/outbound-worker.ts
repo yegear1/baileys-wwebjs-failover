@@ -47,6 +47,62 @@ function isNativeSendPayload(payload: OutboundQueuePayload): payload is NativeSe
 }
 
 /**
+ * Infers outbound message media type and default MIME type from MIME, URL, and document flag.
+ *
+ * INVARIANT: Prevents forced type="image" for audio/video payloads, which causes
+ * Baileys socket failures or misrouted media packets (k-014).
+ */
+export function inferMediaType(
+  rawMime: string | null,
+  url: string | null,
+  sendAsDocument: boolean,
+): {
+  type: "document" | "video" | "audio" | "image";
+  mimeType: string;
+} {
+  if (sendAsDocument) {
+    return {
+      type: "document",
+      mimeType: rawMime ?? "application/octet-stream",
+    };
+  }
+
+  const normalizedMime = rawMime?.toLowerCase().trim();
+  if (normalizedMime) {
+    if (normalizedMime.startsWith("video/")) {
+      return { type: "video", mimeType: rawMime ?? "video/mp4" };
+    }
+    if (normalizedMime.startsWith("audio/")) {
+      return { type: "audio", mimeType: rawMime ?? "audio/ogg" };
+    }
+    if (normalizedMime.startsWith("image/")) {
+      return { type: "image", mimeType: rawMime ?? "image/jpeg" };
+    }
+  }
+
+  if (url) {
+    const cleanUrl = url.split("?")[0]?.toLowerCase() ?? "";
+    if (/\.(mp4|m4v|mov|mkv|webm|avi)$/.test(cleanUrl)) {
+      return { type: "video", mimeType: rawMime ?? "video/mp4" };
+    }
+    if (/\.(mp3|ogg|opus|wav|m4a|aac|flac)$/.test(cleanUrl)) {
+      return { type: "audio", mimeType: rawMime ?? "audio/ogg" };
+    }
+    if (/\.(jpe?g|png|gif|webp|bmp|svg)$/.test(cleanUrl)) {
+      return { type: "image", mimeType: rawMime ?? "image/jpeg" };
+    }
+    if (/\.(pdf|zip|tar|gz|docx?|xlsx?)$/.test(cleanUrl)) {
+      return { type: "document", mimeType: rawMime ?? "application/octet-stream" };
+    }
+  }
+
+  return {
+    type: "image",
+    mimeType: rawMime ?? "image/jpeg",
+  };
+}
+
+/**
  * Normalizes outbound queue payloads accepting both canonical whatsapp-api schemas
  * and native gateway message objects.
  */
@@ -85,12 +141,13 @@ export function normalizeOutboundPayload(raw: unknown): NormalizedOutboundReques
   const quote = parsed.quotedMessageId ?? parsed.quote_id ?? parsed.reply_to_id ?? null;
   const isSticker = Boolean(parsed.is_sticker ?? parsed.isSticker ?? parsed.asSticker ?? false);
   const mediaBase64 = parsed.media_base64 ?? parsed.mediaBase64 ?? parsed.mediaData ?? null;
-  const mediaMimetype =
+  const rawMimetype =
     parsed.media_mimetype ??
     parsed.mediaMimetype ??
     parsed.mimetype ??
-    (isSticker ? "image/webp" : "image/jpeg");
-  const mediaUrl = parsed.media_url ?? parsed.mediaUrl ?? null;
+    parsed.media?.mimeType ??
+    null;
+  const mediaUrl = parsed.media_url ?? parsed.mediaUrl ?? parsed.media?.url ?? null;
   const sendAsDocument = Boolean(parsed.send_as_document ?? parsed.sendAsDocument ?? false);
   const stickerName =
     parsed.sticker_name ?? parsed.stickerName ?? parsed.pack_name ?? parsed.packName ?? undefined;
@@ -104,14 +161,15 @@ export function normalizeOutboundPayload(raw: unknown): NormalizedOutboundReques
   if (isSticker) {
     type = "sticker";
     media = {
-      mimeType: mediaMimetype,
+      mimeType: rawMimetype ?? "image/webp",
       data: mediaBase64 ?? undefined,
       url: mediaUrl ?? undefined,
     };
   } else if (mediaBase64 || mediaUrl || media) {
-    type = sendAsDocument ? "document" : "image";
+    const resolved = inferMediaType(rawMimetype, mediaUrl, sendAsDocument);
+    type = resolved.type;
     media = {
-      mimeType: mediaMimetype,
+      mimeType: resolved.mimeType,
       data: mediaBase64 ?? undefined,
       url: mediaUrl ?? undefined,
       caption: body.length > 0 ? body : undefined,

@@ -3,6 +3,8 @@ import type { FailoverState } from "../fsm/types.js";
 import { logger } from "../index.js";
 import {
   DEFAULT_BLPOP_TIMEOUT_SECONDS,
+  DEFAULT_REACT_JITTER_MAX_MS,
+  DEFAULT_REACT_JITTER_MIN_MS,
   DEFAULT_REACT_QUEUE,
   type IRedisClient,
   type ReactPayload,
@@ -16,6 +18,8 @@ export interface RedisReactWorkerOptions {
   readonly reactQueueKey?: string | undefined;
   readonly blpopTimeoutSeconds?: number | undefined;
   readonly pauseCheckIntervalMs?: number | undefined;
+  readonly minJitterMs?: number | undefined;
+  readonly maxJitterMs?: number | undefined;
 }
 
 const TRANSITION_STATES: ReadonlySet<FailoverState> = new Set([
@@ -36,6 +40,8 @@ export class RedisReactWorker {
   private readonly reactQueueKey: string;
   private readonly blpopTimeoutSeconds: number;
   private readonly pauseCheckIntervalMs: number;
+  private readonly minJitterMs: number;
+  private readonly maxJitterMs: number;
 
   private isRunning = false;
   private isPaused = false;
@@ -44,6 +50,8 @@ export class RedisReactWorker {
   private pauseWakeupResolve?: (() => void) | undefined = undefined;
   private pauseTimer?: NodeJS.Timeout | undefined = undefined;
   private loopSleepTimer?: NodeJS.Timeout | undefined = undefined;
+  private jitterTimer?: NodeJS.Timeout | undefined = undefined;
+  private jitterResolve?: (() => void) | undefined = undefined;
 
   private processedCount = 0;
   private errorCount = 0;
@@ -56,6 +64,11 @@ export class RedisReactWorker {
     this.reactQueueKey = options.reactQueueKey ?? DEFAULT_REACT_QUEUE;
     this.blpopTimeoutSeconds = options.blpopTimeoutSeconds ?? DEFAULT_BLPOP_TIMEOUT_SECONDS;
     this.pauseCheckIntervalMs = options.pauseCheckIntervalMs ?? 500;
+    this.minJitterMs = Math.max(0, options.minJitterMs ?? DEFAULT_REACT_JITTER_MIN_MS);
+    this.maxJitterMs = Math.max(
+      this.minJitterMs,
+      options.maxJitterMs ?? DEFAULT_REACT_JITTER_MAX_MS,
+    );
   }
 
   start(): void {
@@ -99,6 +112,7 @@ export class RedisReactWorker {
       this.loopSleepTimer = undefined;
     }
 
+    this.cancelJitter();
     this.triggerWakeup();
 
     try {
@@ -110,6 +124,43 @@ export class RedisReactWorker {
     } finally {
       this.loopPromise = undefined;
     }
+  }
+
+  private cancelJitter(): void {
+    if (this.jitterTimer) {
+      clearTimeout(this.jitterTimer);
+      this.jitterTimer = undefined;
+    }
+    if (this.jitterResolve) {
+      const resolve = this.jitterResolve;
+      this.jitterResolve = undefined;
+      resolve();
+    }
+  }
+
+  private async sleepInterruptible(ms: number): Promise<boolean> {
+    if (ms <= 0 || !this.isRunning) {
+      return this.isRunning;
+    }
+    await new Promise<void>((resolve) => {
+      this.jitterResolve = resolve;
+      this.jitterTimer = setTimeout(() => {
+        this.jitterTimer = undefined;
+        if (this.jitterResolve === resolve) {
+          this.jitterResolve = undefined;
+          resolve();
+        }
+      }, ms);
+      this.jitterTimer.unref?.();
+    });
+    return this.isRunning;
+  }
+
+  private calculateJitterDelay(): number {
+    if (this.maxJitterMs <= 0 || this.maxJitterMs < this.minJitterMs) {
+      return 0;
+    }
+    return Math.floor(Math.random() * (this.maxJitterMs - this.minJitterMs + 1)) + this.minJitterMs;
   }
 
   private triggerWakeup(): void {
@@ -155,6 +206,20 @@ export class RedisReactWorker {
       return;
     }
 
+    // INVARIANT: Apply randomized human delay (default 350ms-700ms) before dispatching reactions
+    // to prevent automated companion bot detection by Meta anti-spam heuristics (k-015).
+    const jitterDelay = this.calculateJitterDelay();
+    if (jitterDelay > 0) {
+      const stillRunning = await this.sleepInterruptible(jitterDelay);
+      if (!stillRunning) {
+        logger.warn(
+          { messageId: payload.messageId, reaction: payload.reaction },
+          "Reaction dispatch aborted during human jitter delay due to shutdown",
+        );
+        return;
+      }
+    }
+
     try {
       await this.orchestrator.sendReaction(payload.messageId, payload.reaction, payload.remoteJid);
       this.processedCount += 1;
@@ -165,6 +230,7 @@ export class RedisReactWorker {
           reaction: payload.reaction,
           remoteJid: payload.remoteJid,
           uuid: payload.uuid,
+          jitterDelayMs: jitterDelay,
         },
         "Reaction dispatched successfully",
       );

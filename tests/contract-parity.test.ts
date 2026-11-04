@@ -95,7 +95,7 @@ describe("Outbound Contract Parity (Brain & Gateway Compatibility)", () => {
 
 describe("Outbound Mappers Parity", () => {
   it("maps sticker message with Buffer to Baileys content", () => {
-    const testBuffer = Buffer.from("webp-binary-data");
+    const testBuffer = Buffer.from("RIFF\x24\x00\x00\x00WEBPVP8 ");
     const outbound: OutboundMessage = {
       to: "5511999998888@s.whatsapp.net",
       type: "sticker",
@@ -112,7 +112,7 @@ describe("Outbound Mappers Parity", () => {
   });
 
   it("maps sticker message with base64 string to Baileys content", () => {
-    const rawBase64 = Buffer.from("base64-data").toString("base64");
+    const rawBase64 = Buffer.from("RIFF\x24\x00\x00\x00WEBPVP8 ").toString("base64");
     const outbound: OutboundMessage = {
       to: "5511999998888@s.whatsapp.net",
       type: "sticker",
@@ -125,6 +125,32 @@ describe("Outbound Mappers Parity", () => {
     const mapped = mapOutboundToBaileysContent(outbound);
     expect(mapped).toHaveProperty("sticker");
     expect(Buffer.isBuffer((mapped as { sticker: Buffer }).sticker)).toBe(true);
+  });
+
+  it("validates sticker message and throws error on non-webp payload", () => {
+    expect(() =>
+      mapOutboundToBaileysContent({
+        to: "5511999998888@s.whatsapp.net",
+        type: "sticker",
+        media: {
+          mimeType: "image/png",
+          data: Buffer.from("RIFF\x24\x00\x00\x00WEBPVP8 "),
+        },
+      }),
+    ).toThrow(/strictly expected WebP format/);
+
+    expect(() =>
+      mapOutboundToBaileysContent({
+        to: "5511999998888@s.whatsapp.net",
+        type: "sticker",
+        media: {
+          mimeType: "image/webp",
+          data: Buffer.from([
+            0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+          ]),
+        },
+      }),
+    ).toThrow(/strictly expected WebP format/);
   });
 
   it("maps text with mentions to Baileys content", () => {
@@ -213,6 +239,8 @@ describe("Redis React Consumer & Driver Reaction Parity", () => {
       orchestrator,
       reactQueueKey: "whatsapp:react",
       blpopTimeoutSeconds: 0.05,
+      minJitterMs: 0,
+      maxJitterMs: 0,
     });
 
     reactWorker.start();
@@ -283,6 +311,8 @@ describe("Redis React Consumer & Driver Reaction Parity", () => {
       orchestrator,
       reactQueueKey: "whatsapp:react",
       blpopTimeoutSeconds: 0.05,
+      minJitterMs: 0,
+      maxJitterMs: 0,
     });
 
     reactWorker.start();
@@ -290,6 +320,82 @@ describe("Redis React Consumer & Driver Reaction Parity", () => {
     await reactWorker.stop();
 
     expect(sendReactionSpy).toHaveBeenCalledWith("msg_999", "🔥", "5511988887777@s.whatsapp.net");
+    await orchestrator.shutdown();
+  });
+
+  it("applies human jitter delay within configured window before dispatching reactions", async () => {
+    const sendReactionSpy = vi.fn().mockResolvedValue(undefined);
+    const mockDriver: IWhatsAppDriver = {
+      name: "baileys",
+      connect: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      sendMessage: vi.fn(),
+      sendReaction: sendReactionSpy,
+      getStatus: vi
+        .fn()
+        .mockReturnValue({ engine: "baileys", state: "CONNECTED", connected: true }),
+      onMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+    };
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver: mockDriver,
+      standbyDriver: mockDriver,
+      disableBackgroundProbeTimer: true,
+      enableHostConnectivityGuard: false,
+    });
+    await orchestrator.start();
+
+    const mockRedisClient: IRedisClient = {
+      connect: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      get: vi.fn().mockResolvedValue(null),
+      set: vi.fn().mockResolvedValue("OK"),
+      del: vi.fn().mockResolvedValue(1),
+      lPush: vi.fn().mockResolvedValue(1),
+      blPop: vi
+        .fn()
+        .mockResolvedValueOnce({
+          key: "whatsapp:react",
+          element: JSON.stringify({
+            id: "msg_jitter",
+            reaction: "⏳",
+            remote_jid: "5511988887777@s.whatsapp.net",
+          }),
+        })
+        .mockImplementation(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          return null;
+        }),
+    };
+
+    const reactWorker = new RedisReactWorker({
+      client: mockRedisClient,
+      orchestrator,
+      reactQueueKey: "whatsapp:react",
+      blpopTimeoutSeconds: 0.05,
+      minJitterMs: 80,
+      maxJitterMs: 120,
+    });
+
+    const start = Date.now();
+    reactWorker.start();
+
+    // After 30ms, jitter should still be active
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(sendReactionSpy).not.toHaveBeenCalled();
+
+    // Wait for jitter window to expire
+    await new Promise((resolve) => setTimeout(resolve, 140));
+    await reactWorker.stop();
+
+    const elapsed = Date.now() - start;
+    expect(sendReactionSpy).toHaveBeenCalledWith(
+      "msg_jitter",
+      "⏳",
+      "5511988887777@s.whatsapp.net",
+    );
+    expect(elapsed).toBeGreaterThanOrEqual(75);
     await orchestrator.shutdown();
   });
 });

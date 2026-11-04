@@ -200,6 +200,36 @@ function resolveMediaPayload(media?: MediaAttachment, type = "media"): Buffer | 
 }
 
 /**
+ * Validates that sticker payload adheres strictly to WebP format.
+ *
+ * INVARIANT: Baileys stickerMessage strictly expects pre-encoded WebP buffers (k-013).
+ * Passing raw JPEG/PNG/MP4 buffers causes WhatsApp to silently fail or render blank stickers.
+ */
+export function validateWebpPayload(payload: Buffer | { url: string }, mimeType?: string): void {
+  if (
+    mimeType !== undefined &&
+    mimeType !== null &&
+    mimeType.toLowerCase().trim() !== "image/webp"
+  ) {
+    throw new Error(
+      `Invalid sticker payload: strictly expected WebP format (image/webp), got "${mimeType}"`,
+    );
+  }
+
+  if (Buffer.isBuffer(payload)) {
+    if (payload.length < 12) {
+      throw new Error("Invalid sticker payload: Buffer is too small to be a valid WebP");
+    }
+
+    const riff = payload.subarray(0, 4).toString("ascii");
+    const webp = payload.subarray(8, 12).toString("ascii");
+    if (riff !== "RIFF" || webp !== "WEBP") {
+      throw new Error("Invalid sticker payload: strictly expected WebP format (RIFF....WEBP)");
+    }
+  }
+}
+
+/**
  * Maps unified OutboundMessage to Baileys AnyMessageContent.
  */
 export function mapOutboundToBaileysContent(outbound: OutboundMessage): AnyMessageContent {
@@ -216,6 +246,7 @@ export function mapOutboundToBaileysContent(outbound: OutboundMessage): AnyMessa
 
     case "sticker": {
       const payload = resolveMediaPayload(outbound.media, outbound.type);
+      validateWebpPayload(payload, outbound.media?.mimeType);
       return {
         sticker: payload,
         mimetype: outbound.media?.mimeType ?? "image/webp",

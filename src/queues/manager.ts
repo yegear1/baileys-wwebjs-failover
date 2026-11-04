@@ -40,6 +40,8 @@ export interface RedisQueueManagerOptions {
   readonly pauseCheckIntervalMs?: number | undefined;
   readonly delayConfig?: Partial<OutboundDelayConfig> | undefined;
   readonly enableTypingPresence?: boolean | undefined;
+  readonly reactJitterMinMs?: number | undefined;
+  readonly reactJitterMaxMs?: number | undefined;
 }
 
 export interface QueueManagerStatus {
@@ -133,6 +135,8 @@ export class RedisQueueManager {
       reactQueueKey: this.reactQueueKey,
       blpopTimeoutSeconds: options.blpopTimeoutSeconds ?? DEFAULT_BLPOP_TIMEOUT_SECONDS,
       pauseCheckIntervalMs: options.pauseCheckIntervalMs ?? 500,
+      minJitterMs: options.reactJitterMinMs,
+      maxJitterMs: options.reactJitterMaxMs,
     });
   }
 
