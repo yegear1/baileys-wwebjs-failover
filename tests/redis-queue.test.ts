@@ -1067,4 +1067,38 @@ describe("RedisQueueManager", () => {
     await queueManager.stop();
     await orchestrator.shutdown();
   });
+
+  it("applies exponential backoff on consecutive redis blPop errors", async () => {
+    const primaryDriver = new MockWhatsAppDriver("baileys");
+    const standbyDriver = new MockWhatsAppDriver("wwebjs");
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver,
+      standbyDriver,
+      disableBackgroundProbeTimer: true,
+    });
+    await orchestrator.start();
+
+    const client = new MockRedisClient();
+    client.blPop = async () => {
+      throw new Error("MISCONF Redis is configured to save RDB snapshots");
+    };
+
+    const worker = new RedisOutboundWorker({
+      client,
+      orchestrator,
+      outboundQueueKey: "whatsapp:send:priority",
+      lowPriorityOutboundQueueKey: "whatsapp:send:low",
+      blpopTimeoutSeconds: 0.05,
+    });
+
+    worker.start();
+    await new Promise((r) => setTimeout(r, 60));
+
+    const metrics = worker.getMetrics();
+    expect(metrics.errorCount).toBeGreaterThanOrEqual(1);
+    expect(metrics.lastError).toContain("MISCONF");
+
+    await worker.stop();
+    await orchestrator.shutdown();
+  });
 });

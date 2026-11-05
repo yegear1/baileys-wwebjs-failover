@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### [06.2] Operational Observability & Production Rollout Verification
+### [06.2] Redis Persistence Hygiene & Worker Exponential Backoff
 
-**Status:** `READY FOR PLANNING`
-**Objective:** Define post-release operational observability, alerting dashboards, and production rollout verification.
+**Status:** `RUNNING`
+**Objective:** Disallow RDB snapshots and disable `stop-writes-on-bgsave-error` in Redis Compose service; implement adaptive exponential backoff in outbound and reaction worker loops to eliminate tight error loops and telemetry storms during transient Redis persistence degradation.
 
 ---
 

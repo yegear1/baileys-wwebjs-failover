@@ -78,8 +78,9 @@ services:
       - --appendonly
       - "yes"
       - --save
-      - "60"
-      - "1"
+      - ""
+      - --stop-writes-on-bgsave-error
+      - "no"
       - --maxmemory
       - 256mb
       - --maxmemory-policy

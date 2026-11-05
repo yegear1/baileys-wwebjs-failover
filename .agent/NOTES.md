@@ -78,6 +78,7 @@ $$\text{hash} = \text{SHA256}(\text{remoteJid} + \text{senderJid} + (\text{textB
 * Circuit breaker consecutive failure counter strictly tracks unexpired errors within the sliding window, guaranteeing consistent decay under sustained errors, intermittent bursts, or idle periods.
 * Outbound queue worker pauses BLPOP dequeuing during failover transitions (`FENCING`, `COLD_START_STANDBY`, `RECOVERY_SWAP`), persisting burst messages safely in Redis with zero loss across failover switches.
 * Dynamic timer and listener hygiene: `runWithTimeout` cancels timeout races upon resolution; `RedisOutboundWorker` clears wakeup and backoff timers on pause/stop; `FailoverOrchestrator` clears listener sets on shutdown; `GatewayApplication` deregisters OS signal handlers on stop, guaranteeing bounded heap delta and zero dangling handles across repeated lifecycle loops.
+* Redis Persistence Hygiene & Worker Backoff: Redis runs strictly with AOF (`appendonly yes`) and RDB snapshots disabled (`--save ""` and `--stop-writes-on-bgsave-error no`), preventing fork-induced SIGKILL crashes and write-lockouts in resource-constrained environments. `RedisOutboundWorker` and `RedisReactWorker` apply interruptible exponential backoff (1s -> 2s -> 4s -> 8s -> 15s cap) on consecutive `blPop` loop errors, avoiding telemetry log storms during transient Redis degradation.
 
 ---
 

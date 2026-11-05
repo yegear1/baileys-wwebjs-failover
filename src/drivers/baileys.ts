@@ -830,9 +830,7 @@ export class BaileysDriver implements IWhatsAppDriver {
     }
 
     // Invalidate sender key if group message
-    const isGroup =
-      (remoteJid && remoteJid.endsWith("@g.us")) ||
-      (remoteJid && remoteJid !== targetJid);
+    const isGroup = remoteJid?.endsWith("@g.us") || (remoteJid && remoteJid !== targetJid);
     if (isGroup && remoteJid) {
       const senderKeyId = `${remoteJid}::${decoded.user}::${decoded.device || 0}`;
       try {
@@ -857,10 +855,12 @@ export class BaileysDriver implements IWhatsAppDriver {
     // Pre-Key replenishment if pre-key error detected
     if (/pre[-]?key|missing_keys|bundle not found/i.test(reason)) {
       try {
-        const sock = this.socket as (WASocket & {
-          uploadPreKeysToServerIfRequired?: () => Promise<void>;
-          uploadPreKeys?: (count?: number) => Promise<void>;
-        }) | null;
+        const sock = this.socket as
+          | (WASocket & {
+              uploadPreKeysToServerIfRequired?: () => Promise<void>;
+              uploadPreKeys?: (count?: number) => Promise<void>;
+            })
+          | null;
         if (sock && typeof sock.uploadPreKeysToServerIfRequired === "function") {
           await sock.uploadPreKeysToServerIfRequired();
         } else if (sock && typeof sock.uploadPreKeys === "function") {

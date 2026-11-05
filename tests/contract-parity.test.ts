@@ -398,4 +398,56 @@ describe("Redis React Consumer & Driver Reaction Parity", () => {
     expect(elapsed).toBeGreaterThanOrEqual(75);
     await orchestrator.shutdown();
   });
+
+  it("applies exponential backoff on consecutive blPop errors in react worker", async () => {
+    const mockDriver: IWhatsAppDriver = {
+      name: "baileys",
+      connect: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn().mockResolvedValue(undefined),
+      sendMessage: vi.fn(),
+      sendReaction: vi.fn().mockResolvedValue(undefined),
+      getStatus: vi
+        .fn()
+        .mockReturnValue({ engine: "baileys", state: "CONNECTED", connected: true }),
+      onMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+    };
+
+    const orchestrator = new FailoverOrchestrator({
+      primaryDriver: mockDriver,
+      standbyDriver: mockDriver,
+      disableBackgroundProbeTimer: true,
+      enableHostConnectivityGuard: false,
+    });
+    await orchestrator.start();
+
+    const mockRedisClient = {
+      blPop: vi
+        .fn()
+        .mockRejectedValue(new Error("MISCONF Redis is configured to save RDB snapshots")),
+      lPush: vi.fn().mockResolvedValue(1),
+      set: vi.fn().mockResolvedValue("OK"),
+      get: vi.fn().mockResolvedValue(null),
+      del: vi.fn().mockResolvedValue(1),
+      flushAll: vi.fn().mockResolvedValue("OK"),
+      isOpen: true,
+    } as unknown as IRedisClient;
+
+    const reactWorker = new RedisReactWorker({
+      client: mockRedisClient,
+      orchestrator,
+      reactQueueKey: "whatsapp:react",
+      blpopTimeoutSeconds: 0.05,
+    });
+
+    reactWorker.start();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const metrics = reactWorker.getMetrics();
+    expect(metrics.errorCount).toBeGreaterThanOrEqual(1);
+    expect(metrics.lastError).toContain("MISCONF");
+
+    await reactWorker.stop();
+    await orchestrator.shutdown();
+  });
 });

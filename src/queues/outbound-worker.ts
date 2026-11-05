@@ -223,7 +223,6 @@ export class RedisOutboundWorker {
   private unsubscribeOrchestrator?: (() => void) | undefined = undefined;
   private pauseWakeupResolve?: (() => void) | undefined = undefined;
   private pauseTimer?: NodeJS.Timeout | undefined = undefined;
-  private loopSleepTimer?: NodeJS.Timeout | undefined = undefined;
   private delayResolve?: (() => void) | undefined = undefined;
   private delayTimer?: NodeJS.Timeout | undefined = undefined;
 
@@ -308,11 +307,6 @@ export class RedisOutboundWorker {
     if (this.pauseTimer) {
       clearTimeout(this.pauseTimer);
       this.pauseTimer = undefined;
-    }
-
-    if (this.loopSleepTimer) {
-      clearTimeout(this.loopSleepTimer);
-      this.loopSleepTimer = undefined;
     }
 
     this.cancelDelaySleep();
@@ -436,6 +430,7 @@ export class RedisOutboundWorker {
 
   private async runLoop(): Promise<void> {
     const targetKeys = this.getTargetQueueKeys();
+    let consecutiveErrors = 0;
 
     while (this.isRunning) {
       const currentState = this.orchestrator.getState();
@@ -451,6 +446,7 @@ export class RedisOutboundWorker {
 
       try {
         const item = await this.client.blPop(targetKeys, this.blpopTimeoutSeconds);
+        consecutiveErrors = 0;
 
         if (!item?.element) {
           // Timeout reached with no element available; continue loop
@@ -464,20 +460,18 @@ export class RedisOutboundWorker {
         }
 
         this.errorCount += 1;
+        consecutiveErrors += 1;
+        // INVARIANT: Exponential backoff (1s -> 2s -> 4s -> 8s -> 16s cap at 15s) prevents
+        // high-frequency error log storms and CPU churn during sustained Redis persistence degradation.
+        const backoffMs = Math.min(1000 * 2 ** (consecutiveErrors - 1), 15000);
         this.lastError = err instanceof Error ? err.message : String(err);
         logger.error(
-          { err, queues: targetKeys },
+          { err, queues: targetKeys, consecutiveErrors, backoffMs },
           "Error in outbound worker loop; applying transient backoff",
         );
 
-        // Sleep briefly before retrying to prevent hot loop on Redis disconnect
-        await new Promise((resolve) => {
-          this.loopSleepTimer = setTimeout(() => {
-            this.loopSleepTimer = undefined;
-            resolve(undefined);
-          }, 1000);
-          this.loopSleepTimer.unref?.();
-        });
+        // Sleep with exponential backoff; interruptible on worker stop
+        await this.sleepInterruptible(backoffMs);
       }
     }
   }

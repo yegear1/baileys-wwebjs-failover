@@ -49,7 +49,6 @@ export class RedisReactWorker {
   private unsubscribeOrchestrator?: (() => void) | undefined = undefined;
   private pauseWakeupResolve?: (() => void) | undefined = undefined;
   private pauseTimer?: NodeJS.Timeout | undefined = undefined;
-  private loopSleepTimer?: NodeJS.Timeout | undefined = undefined;
   private jitterTimer?: NodeJS.Timeout | undefined = undefined;
   private jitterResolve?: (() => void) | undefined = undefined;
 
@@ -105,11 +104,6 @@ export class RedisReactWorker {
     if (this.pauseTimer) {
       clearTimeout(this.pauseTimer);
       this.pauseTimer = undefined;
-    }
-
-    if (this.loopSleepTimer) {
-      clearTimeout(this.loopSleepTimer);
-      this.loopSleepTimer = undefined;
     }
 
     this.cancelJitter();
@@ -245,6 +239,8 @@ export class RedisReactWorker {
   }
 
   private async runLoop(): Promise<void> {
+    let consecutiveErrors = 0;
+
     while (this.isRunning) {
       const currentState = this.orchestrator.getState();
       if (TRANSITION_STATES.has(currentState)) {
@@ -257,6 +253,8 @@ export class RedisReactWorker {
 
       try {
         const item = await this.client.blPop(this.reactQueueKey, this.blpopTimeoutSeconds);
+        consecutiveErrors = 0;
+
         if (!item?.element) {
           continue;
         }
@@ -268,19 +266,18 @@ export class RedisReactWorker {
         }
 
         this.errorCount += 1;
+        consecutiveErrors += 1;
+        // INVARIANT: Exponential backoff (1s -> 2s -> 4s -> 8s -> 16s cap at 15s) prevents
+        // high-frequency error log storms and CPU churn during sustained Redis persistence degradation.
+        const backoffMs = Math.min(1000 * 2 ** (consecutiveErrors - 1), 15000);
         this.lastError = err instanceof Error ? err.message : String(err);
         logger.error(
-          { err, queue: this.reactQueueKey },
+          { err, queue: this.reactQueueKey, consecutiveErrors, backoffMs },
           "Error in react worker loop; applying transient backoff",
         );
 
-        await new Promise((resolve) => {
-          this.loopSleepTimer = setTimeout(() => {
-            this.loopSleepTimer = undefined;
-            resolve(undefined);
-          }, 1000);
-          this.loopSleepTimer.unref?.();
-        });
+        // Sleep with exponential backoff; interruptible on worker stop
+        await this.sleepInterruptible(backoffMs);
       }
     }
   }
