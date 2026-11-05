@@ -7,10 +7,10 @@
 
 ## Active Task
 
-### [06.2] Redis Persistence Hygiene & Worker Exponential Backoff
+### [06.3] Operational Observability & Production Rollout Verification
 
-**Status:** `RUNNING`
-**Objective:** Disallow RDB snapshots and disable `stop-writes-on-bgsave-error` in Redis Compose service; implement adaptive exponential backoff in outbound and reaction worker loops to eliminate tight error loops and telemetry storms during transient Redis persistence degradation.
+**Status:** `READY FOR PLANNING`
+**Objective:** Define post-release operational observability, alerting dashboards, and production rollout verification.
 
 ---
 
@@ -18,6 +18,7 @@
 
 | Task | Title | Commit(s) | Date |
 |---|---|---|---|
+| [06.2] | Redis Persistence Hygiene & Worker Exponential Backoff | [`bc96b43`](file:///home/luis/Github/ye-dev/baileys-wwebjs-failover/bc96b43) | 2026-11-05 |
 | [06.1] | Configurable GATEWAY_MODE (failover vs baileys_only) | [`e201c97`](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/e201c97) | 2026-11-03 |
 | *(Archived)* | Tasks [00.0] through [05.3] archived to [`.agent/ARCHIVE.md`](ARCHIVE.md) under `[v0.1.0]` | [`c2b22c8`](file:///home/yegear/github/ye-dev/baileys-wwebjs-failover/c2b22c8) | 2026-11-02 |
 
