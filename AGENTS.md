@@ -6,18 +6,18 @@ You are the lead software engineer developing this project: **baileys-wwebjs-fai
 
 ---
 
-## ⚖️ Rule Precedence Hierarchy
+## Priority Ranking & Precedence
 
-When requirements or directives conflict, the agent MUST resolve them using the following priority:
-1. **Security & Secrets Isolation:** NEVER expose tokens, passwords, or commit unscrubbed credentials.
-2. **Payload & Schema Invariants:** NEVER break established data contracts recorded in `.agent/NOTES.md`, `.agent/ECOSYSTEM.md`, or schemas.
-3. **Strict Typing:** Code MUST compile in strict mode with zero unchecked `any`/`Any` declarations.
-4. **Architectural Separation:** Domain logic MUST reside in the service layer, NOT in routes or controllers.
-5. **Code Style & Complexity:** Functions SHOULD remain concise (typically ≤ 50 LOC) with low cognitive complexity; formatters MUST pass.
+Resolve directive conflicts using the strict canonical precedence hierarchy:
 
-When a conflict cannot be resolved using this hierarchy, the agent MUST halt execution and request user clarification.
+| Priority | Tier | Rules & Invariants |
+| :---: | :--- | :--- |
+| **`[P0]`** | **Security & Blast Radius** | Zero credential exposure, prohibit destructive git operations (`--force`, `reset --hard`) and destructive docker data actions. |
+| **`[P1]`** | **Payload Invariants & Automated Contracts** | Single ADR diary (`docs/adr/decisions.md`), `NOTES.md` heading ban, schema contracts, strict typing (zero unchecked `any`). |
+| **`[P2]`** | **Architecture & Test Harness** | Domain logic separation, canonical test command pass, consultative dependencies. |
+| **`[P3]`** | **Style & Documentation** | Conventional Commits, Technical English for agent directives and commits. |
 
----
+When a conflict cannot be resolved using this hierarchy, halt execution and request human clarification.
 
 ## Modular Context Triggers
 
