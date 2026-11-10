@@ -28,7 +28,9 @@
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
 
-*(No pending items in backlog)*
+- **[06.4]** `[APPROVED]` Inbound Message Deduplication by Canonical Message ID & Concatenated Media Digest
+  - **Objective:** Eliminate false-positive message drops on rapid commands (!s) by using unique remote `msg.id` as primary deduplication lock and concatenating `textBody:mediaDigest` in candidate content fallback. Prevent cross-bucket 300s TTL cascade on adjacent time windows.
+  - **Paths:** `src/utils/dedup.ts`, `src/queues/dedup-lock.ts`, `src/queues/inbound-publisher.ts`, `tests/`
 
 ---
 
