@@ -31,3 +31,6 @@ Thumbs.db
 .claude/
 .maestri/
 .multigravity/
+
+# Agent & worktree ephemeral scratch
+.worktrees/

@@ -6,13 +6,29 @@ You are the lead software engineer developing this project: **baileys-wwebjs-fai
 
 ---
 
+## Scope & Blast Radius
+
+- **MUTATION BOUNDARY:**
+  - All file mutations (creates, edits, deletes) MUST be strictly contained within this project repository.
+  - Writing outside the project directory or touching/inspecting host credentials (`~/.ssh`, `~/.aws`, auth tokens, host dotfiles) is strictly forbidden.
+- **IMMUTABLE PATHS:**
+  - `.env` files, production credentials, and private tokens.
+  - Host credentials and environments (`~/.ssh`, `~/.aws`, auth tokens, host dotfiles).
+- **FORBIDDEN ACTIONS:**
+  - `[P0]` MUST NOT mutate files outside this project repository (writing outside the project directory is strictly forbidden).
+  - `[P0]` MUST NOT touch or inspect host credentials (`~/.ssh`, `~/.aws`, auth tokens, host dotfiles).
+  - `[P0]` MUST NOT expose tokens, passwords, or commit unscrubbed credentials.
+  - `[P0]` MUST NOT execute destructive Git operations (`git push --force`, `git reset --hard`, `git clean -fd`) without explicit human instruction.
+
+---
+
 ## Priority Ranking & Precedence
 
 Resolve directive conflicts using the strict canonical precedence hierarchy:
 
 | Priority | Tier | Rules & Invariants |
 | :---: | :--- | :--- |
-| **`[P0]`** | **Security & Blast Radius** | Zero credential exposure, prohibit destructive git operations (`--force`, `reset --hard`) and destructive docker data actions. |
+| **`[P0]`** | **Security & Blast Radius** | Repository mutation containment (zero writes outside project, zero touching/inspecting host credentials `~/.ssh`/`~/.aws`); Zero credential exposure, prohibit destructive git operations (`--force`, `reset --hard`) and destructive docker data actions. |
 | **`[P1]`** | **Payload Invariants & Automated Contracts** | Single ADR diary (`docs/adr/decisions.md`), `NOTES.md` heading ban, schema contracts, strict typing (zero unchecked `any`). |
 | **`[P2]`** | **Architecture & Test Harness** | Domain logic separation, canonical test command pass, consultative dependencies. |
 | **`[P3]`** | **Style & Documentation** | Conventional Commits, Technical English for agent directives and commits. |
@@ -22,13 +38,15 @@ When a conflict cannot be resolved using this hierarchy, halt execution and requ
 ## Modular Context Triggers
 
 The agent MUST minimize default token load by following progressive disclosure:
+- **Ephemeral feature specifications (Batch Context Anchor):** Read `.agent/scratch/specs/<XX-YY>.md` when executing sequential sub-task batches (`[BATCH: Bx]`) to reuse feature contracts and file maps without re-scanning the repository.
 - **Default Context (Loaded on start):** `AGENTS.md`, `.agent/TASK.md`, `.agent/NOTES.md` (Active Contracts only).
 - **Architectural Decisions (`docs/adr/decisions.md`):** MUST load when creating new services, researching historical trade-offs, or changing system boundaries.
 - **Multi-Repo Ecosystem (`.agent/ECOSYSTEM.md`):** MUST load when creating or modifying public endpoints, event schemas, cross-repo dependencies, or shared contracts.
 - **Domain Skills (`.agent/skills/<name>/SKILL.md`):** MUST load only when the active task touches that skill's trigger.
 - **Knowledge Base (`.agent/knowledge/`):** MUST load relevant atomic cards when diagnosing obscure platform errors, runtime gotchas, or adding known workarounds.
-- **Transversal Skills:** Reference external organizational playbooks (`agent-skills`) ONLY when tasks require UI porting, QA audit, sequential/parallel subagent queue execution (`task-queue`), or host-level orchestration.
+- **Hermetic Skills & Context Contract:** Procedural guidelines and skills must be self-contained within `.agent/skills/` or injected directly into the task dispatch prompt by the orchestrator. If a task references an external organizational skill not present in `.agent/skills/`, the agent must not wander the host filesystem; it should request the skill to be injected into the prompt or provisioned locally in `.agent/skills/`.
 
+- Interface & UI verification: Read `.agent/skills/interface-testing/SKILL.md` (loaded on-demand exclusively for UI, preview, or frontend component tasks).
 ---
 
 ## Execution Protocol
@@ -36,16 +54,19 @@ The agent MUST minimize default token load by following progressive disclosure:
 1. Read `AGENTS.md`, `.agent/TASK.md`, and `.agent/NOTES.md` before editing any files.
 2. **Plan first (or Pre-Approved Fast-Track):** If `Status` in `.agent/TASK.md` is `READY FOR PLANNING`, set to `PLANNING`, present plan, await approval, then set to `RUNNING`. If task scope was already decided during planning (`Status: APPROVED`) with zero open questions/blockers, transition directly to `RUNNING` on `proceed` (or use the `task-queue` skill on `proceed queue` to execute sequential/parallel subagents with multi-account quota routing; tag independent tasks that have strictly disjoint file scopes with `[PARALLEL: Wx]` and `Paths:`). Halt and revert to `PLANNING` if any ambiguity or unapproved dependency arises.
 3. Work on exactly ONE active task at a time.
-4. **Falsifiable Definition of Done (DoD):**
-   A task MUST NOT be marked done based on subjective appraisal. It MUST satisfy:
-   - [ ] Strict Typing: Typecheck command exits with code 0.
-   - [ ] Automated Tests: All unit and integration test suites exit with code 0.
-   - [ ] Linters: Linter and formatter checks exit with code 0.
-   - [ ] Git Cleanliness: `git diff --check` exits with code 0.
-   - [ ] Documentation Perimeter: If CLI flags, `.env.example` variables, public ports, or validation commands changed, synchronize `README.md` and `README.pt-br.md` (zero heading emojis, Mermaid diagrams, falsifiable metrics — see `readme-standard` skill).
-   - [ ] Knowledge Preservation: Document obscure platform/runtime gotchas or workarounds as an atomic card in `.agent/knowledge/` (if applicable).
-   - [ ] Atomic Commit: Conventional Commits in English (`feat(scope): ...`).
-   - [ ] Task Log: Active task logged in `.agent/TASK.md` with commit hash; next task promoted.
+- **Sequential Sub-Task Batching (`[BATCH: Bx]`):** Group 2 to 4 atomic sequential subtasks (`[XX.YY.ZZ]`) that share the same architectural layer (`Type:`) and feature spec anchor (`.agent/scratch/specs/XX-YY.md`). Execute subtasks in a single warm-cache session or worktree (`ZZ.01` -> `Verify:` -> atomic `git commit` -> `ZZ.02` -> `Verify:` -> atomic `git commit`) without intermediate planning pauses. Never mix Backend (`Type: code`) and Frontend/QA (`Type: browser-qa` / `mobile-qa`) in the same batch. Do not track extra error counters during execution; rely exclusively on the canonical Fail-Stop circuit breaker.
+
+### Step 3: Falsifiable Definition of Done (DoD)
+A task MUST NOT be marked done based on subjective appraisal. It MUST satisfy:
+- [ ] Strict Typing: Typecheck command exits with code 0.
+- [ ] Automated Tests: All unit and integration test suites exit with code 0.
+- [ ] Linters: Linter and formatter checks exit with code 0.
+- [ ] Interface & UI verification (if UI affected): passes adaptive protocol (interactive preview/device MCPs within T3 Code; non-blocking headless component/build validation outside T3 Code).
+- [ ] Git Cleanliness: `git diff --check` exits with code 0.
+- [ ] Documentation Perimeter: If CLI flags, `.env.example` variables, public ports, or validation commands changed, synchronize `README.md` and `README.pt-br.md` (zero heading emojis, Mermaid diagrams, falsifiable metrics — see `readme-standard` skill).
+- [ ] Knowledge Preservation: Document obscure platform/runtime gotchas or workarounds as an atomic card in `.agent/knowledge/` (if applicable).
+- [ ] Atomic Commit: Conventional Commits in English (`feat(scope): ...`).
+- [ ] Task Log: Active task logged in `.agent/TASK.md` with commit hash; next task promoted.
 
 ---
 
@@ -257,6 +278,18 @@ await lockResources();
 ```
 
 ---
+
+### Sequential Sub-Task Batching (`[BATCH: Bx]`)
+```markdown
+// BAD: Opening 3 separate cold-cache sessions for sequential backend subtasks or mixing Backend + UI in one batch
+[08.02.01] [BATCH: B1] Type: code (prisma/schema.prisma)
+[08.02.02] [BATCH: B1] Type: browser-qa (src/pages/Deals.tsx) // Layer violation!
+
+// GOOD: Grouping 2-4 same-layer subtasks anchored to .agent/scratch/specs/XX-YY.md with per-subtask Verify & commit
+[08.02.01] [APPROVED] [BATCH: B1-backend] Type: code | Read: .agent/scratch/specs/08-02.md | Verify -> git commit
+[08.02.02] [APPROVED] [BATCH: B1-backend] Type: code | Read: .agent/scratch/specs/08-02.md | Verify -> git commit
+[08.02.03] [APPROVED] [BATCH: B1-backend] Type: code | Read: .agent/scratch/specs/08-02.md | Verify -> git commit
+```
 
 ## Git Conventions
 
