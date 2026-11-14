@@ -40,6 +40,13 @@ export interface WWebJSMessageLike {
     readonly description?: string;
   };
   readonly vCards?: string[];
+  readonly getChat?: () => Promise<{
+    readonly isGroup?: boolean;
+    readonly participants?: Array<
+      | { readonly id?: { readonly _serialized?: string; readonly user?: string } | string; readonly _serialized?: string }
+      | string
+    >;
+  }>;
 }
 
 export interface WWebJSSendPayload {
@@ -129,6 +136,7 @@ export function mapWWebJSTypeToMessageType(type: string): MessageType {
 export function mapWWebJSMessageToInbound(
   msg: WWebJSMessageLike,
   selfJid?: string,
+  groupParticipants?: string[],
 ): InboundMessage | null {
   const messageId = msg.id?.id ?? msg.id?._serialized;
   if (!messageId || !msg.from) {
@@ -188,6 +196,7 @@ export function mapWWebJSMessageToInbound(
     textBody,
     media,
     dedupHash,
+    ...(groupParticipants !== undefined ? { groupParticipants } : {}),
   };
 }
 

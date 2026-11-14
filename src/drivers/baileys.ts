@@ -149,6 +149,14 @@ export interface BaileysDriverOptions {
    * Default: 5,000 ms.
    */
   readonly sessionHealCooldownMs?: number;
+  /**
+   * Group participants cache TTL in milliseconds. Default: 300,000 ms (5 minutes).
+   */
+  readonly groupMetadataCacheTtlMs?: number;
+  /**
+   * Group metadata socket query timeout in milliseconds. Default: 5,000 ms (5 seconds).
+   */
+  readonly groupMetadataTimeoutMs?: number;
 }
 
 export class BaileysSendTimeoutError extends Error {
@@ -197,6 +205,10 @@ export class BaileysDriver implements IWhatsAppDriver {
   private readonly sessionHealCooldownMs: number;
   private readonly recentSessionHeals = new Map<string, number>();
   private readonly messageStore = new Map<string, { message: proto.IMessage; remoteJid: string }>();
+  private readonly groupMetadataCacheTtlMs: number;
+  private readonly groupMetadataTimeoutMs: number;
+  private readonly groupMetadataCache = new Map<string, { participants: string[]; expiresAt: number }>();
+  private readonly pendingGroupMetadataFetches = new Map<string, Promise<string[] | undefined>>();
 
   private socket: WASocket | null = null;
   private authState: AuthenticationState | null = null;
@@ -238,6 +250,12 @@ export class BaileysDriver implements IWhatsAppDriver {
     this.retryCounterCache =
       options.retryCounterCache ??
       new BoundedRetryCounterCache({ maxRetries: this.maxMsgRetryCount });
+    this.groupMetadataCacheTtlMs = options.groupMetadataCacheTtlMs ?? 5 * 60 * 1000;
+    this.groupMetadataTimeoutMs =
+      options.groupMetadataTimeoutMs ??
+      (process.env.GROUP_METADATA_TIMEOUT_MS
+        ? Number.parseInt(process.env.GROUP_METADATA_TIMEOUT_MS, 10)
+        : 5000);
   }
 
   public storeMessage(id: string, remoteJid: string, message: proto.IMessage): void {
@@ -347,6 +365,7 @@ export class BaileysDriver implements IWhatsAppDriver {
     this.reconnectAttempt = 0;
     this.authState = null;
     this.recentSessionHeals.clear();
+    this.clearGroupMetadataCache();
 
     if (this.socket) {
       try {
@@ -732,6 +751,86 @@ export class BaileysDriver implements IWhatsAppDriver {
     }
   }
 
+  public clearGroupMetadataCache(): void {
+    this.groupMetadataCache.clear();
+    this.pendingGroupMetadataFetches.clear();
+  }
+
+  public async getGroupParticipants(remoteJid: string): Promise<string[] | undefined> {
+    if (!remoteJid.endsWith("@g.us")) {
+      return undefined;
+    }
+
+    const cached = this.groupMetadataCache.get(remoteJid);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) {
+      return cached.participants;
+    }
+
+    if (!this.socket || typeof this.socket.groupMetadata !== "function") {
+      return cached?.participants;
+    }
+
+    const inFlight = this.pendingGroupMetadataFetches.get(remoteJid);
+    if (inFlight) {
+      return await inFlight;
+    }
+
+    const fetchPromise = this.fetchGroupParticipantsWithTimeout(remoteJid, cached?.participants);
+    this.pendingGroupMetadataFetches.set(remoteJid, fetchPromise);
+    try {
+      return await fetchPromise;
+    } finally {
+      this.pendingGroupMetadataFetches.delete(remoteJid);
+    }
+  }
+
+  private async fetchGroupParticipantsWithTimeout(
+    remoteJid: string,
+    staleFallback?: string[],
+  ): Promise<string[] | undefined> {
+    if (!this.socket || typeof this.socket.groupMetadata !== "function") {
+      return staleFallback;
+    }
+
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`groupMetadata query timed out after ${this.groupMetadataTimeoutMs}ms`));
+        }, this.groupMetadataTimeoutMs);
+        timer.unref?.();
+      });
+
+      const metadataPromise = this.socket.groupMetadata(remoteJid);
+      const metadata = await Promise.race([metadataPromise, timeoutPromise]);
+
+      if (metadata && Array.isArray(metadata.participants)) {
+        const participants = metadata.participants
+          .map((p: { id: string } | string) => (typeof p === "string" ? p : p.id))
+          .filter((id): id is string => Boolean(id));
+
+        this.groupMetadataCache.set(remoteJid, {
+          participants,
+          expiresAt: Date.now() + this.groupMetadataCacheTtlMs,
+        });
+
+        return participants;
+      }
+    } catch (err) {
+      this.logger.warn(
+        { err, remoteJid },
+        "Failed to fetch groupMetadata in Baileys driver; gracefully degrading",
+      );
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+
+    return staleFallback;
+  }
+
   private async handleMessagesUpsert(upsert: { messages: unknown[]; type: string }): Promise<void> {
     const selfJid = this.socket?.user?.id;
 
@@ -755,7 +854,13 @@ export class BaileysDriver implements IWhatsAppDriver {
 
       if (this.messageHandlers.size === 0) continue;
 
-      const inbound = mapBaileysMessageToInbound(webMsg, selfJid);
+      const remoteJid = webMsg.key?.remoteJid;
+      let groupParticipants: string[] | undefined;
+      if (remoteJid && remoteJid.endsWith("@g.us")) {
+        groupParticipants = await this.getGroupParticipants(remoteJid);
+      }
+
+      const inbound = mapBaileysMessageToInbound(webMsg, selfJid, groupParticipants);
 
       if (inbound) {
         // INVARIANT: Automatically ingest media buffers (including quoted stickers/photos)

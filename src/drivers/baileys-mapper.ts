@@ -61,6 +61,7 @@ function extractMediaAttachment(media: BasicMediaInfo, defaultMime: string): Med
 export function mapBaileysMessageToInbound(
   msg: proto.IWebMessageInfo,
   selfJid?: string,
+  groupParticipants?: string[],
 ): InboundMessage | null {
   const key = msg.key;
   if (!key?.remoteJid || !key.id) {
@@ -172,6 +173,7 @@ export function mapBaileysMessageToInbound(
     textBody,
     media,
     dedupHash,
+    ...(groupParticipants !== undefined ? { groupParticipants } : {}),
   };
 }
 

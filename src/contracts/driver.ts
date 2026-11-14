@@ -61,4 +61,5 @@ export interface IWhatsAppDriver {
     reason?: string,
     msgId?: string,
   ): Promise<boolean>;
+  getGroupParticipants?(remoteJid: string): Promise<string[] | undefined>;
 }

@@ -206,6 +206,43 @@ describe("WWebJS Message Mapper", () => {
     expect(inbound?.remoteJid).toBe("123456789@g.us");
     expect(inbound?.senderJid).toBe("5511777777777@s.whatsapp.net");
     expect(inbound?.textBody).toBe("Group announcement");
+    expect(inbound?.groupParticipants).toBeUndefined();
+  });
+
+  it("maps group chat message with groupParticipants when provided", () => {
+    const participants = [
+      "5511777777777@s.whatsapp.net",
+      "5511888888888@s.whatsapp.net",
+    ];
+    const inbound = mapWWebJSMessageToInbound(
+      {
+        id: { id: "grp-002" },
+        from: "123456789@g.us",
+        author: "5511777777777@c.us",
+        fromMe: false,
+        timestamp: 1700000020,
+        type: "chat",
+        body: "!sorteio",
+      },
+      undefined,
+      participants,
+    );
+
+    expect(inbound?.groupParticipants).toEqual(participants);
+  });
+
+  it("ensures direct messages do not include groupParticipants", () => {
+    const inbound = mapWWebJSMessageToInbound({
+      id: { id: "msg-dm" },
+      from: "5511888888888@c.us",
+      fromMe: false,
+      timestamp: 1700000010,
+      type: "chat",
+      body: "Hello in DM",
+    });
+
+    expect(inbound?.groupParticipants).toBeUndefined();
+    expect(inbound).not.toHaveProperty("groupParticipants");
   });
 
   it("maps media messages (image, audio, document)", () => {
@@ -688,5 +725,136 @@ describe("Container Process Hygiene & Teardown", () => {
       await driver.disconnect();
       cleanup();
     }
+  });
+
+  describe("Group Metadata & Participants Handling in WWebJS", () => {
+    it("enriches inbound group messages with normalized groupParticipants from message.getChat()", async () => {
+      const { driver, mockClient, cleanup } = createTestDriver();
+      const received: InboundMessage[] = [];
+      driver.onMessage(async (msg) => {
+        received.push(msg);
+      });
+
+      try {
+        await driver.connect();
+
+        const getChatMock = vi.fn().mockResolvedValue({
+          isGroup: true,
+          participants: [
+            { id: { _serialized: "5511999998888@c.us" } },
+            { id: { _serialized: "5511999997777@c.us" } },
+          ],
+        });
+
+        mockClient.emit("message", {
+          id: { id: "wweb-grp-1" },
+          from: "12036302482394@g.us",
+          author: "5511999998888@c.us",
+          fromMe: false,
+          timestamp: 1700000100,
+          type: "chat",
+          body: "!sorteio",
+          getChat: getChatMock,
+        });
+
+        await vi.waitFor(() => {
+          expect(received.length).toBe(1);
+        });
+
+        expect(getChatMock).toHaveBeenCalled();
+        expect(received[0].groupParticipants).toEqual([
+          "5511999998888@s.whatsapp.net",
+          "5511999997777@s.whatsapp.net",
+        ]);
+      } finally {
+        await driver.disconnect();
+        cleanup();
+      }
+    });
+
+    it("does not attach groupParticipants for direct messages in WWebJS", async () => {
+      const { driver, mockClient, cleanup } = createTestDriver();
+      const received: InboundMessage[] = [];
+      driver.onMessage(async (msg) => {
+        received.push(msg);
+      });
+
+      try {
+        await driver.connect();
+
+        const getChatMock = vi.fn();
+        mockClient.emit("message", {
+          id: { id: "wweb-dm-1" },
+          from: "5511999998888@c.us",
+          fromMe: false,
+          timestamp: 1700000100,
+          type: "chat",
+          body: "Direct message",
+          getChat: getChatMock,
+        });
+
+        await vi.waitFor(() => {
+          expect(received.length).toBe(1);
+        });
+
+        expect(getChatMock).not.toHaveBeenCalled();
+        expect(received[0].groupParticipants).toBeUndefined();
+      } finally {
+        await driver.disconnect();
+        cleanup();
+      }
+    });
+
+    it("caches group participants and prevents redundant getChat calls within TTL window", async () => {
+      const { driver, mockClient, cleanup } = createTestDriver();
+      const received: InboundMessage[] = [];
+      driver.onMessage(async (msg) => {
+        received.push(msg);
+      });
+
+      try {
+        await driver.connect();
+
+        const getChatMock = vi.fn().mockResolvedValue({
+          isGroup: true,
+          participants: [{ id: { _serialized: "5511999998888@c.us" } }],
+        });
+
+        // First message
+        mockClient.emit("message", {
+          id: { id: "wweb-grp-cache-1" },
+          from: "12036302482394@g.us",
+          author: "5511999998888@c.us",
+          fromMe: false,
+          timestamp: 1700000100,
+          type: "chat",
+          body: "Message 1",
+          getChat: getChatMock,
+        });
+
+        // Second message immediately after
+        mockClient.emit("message", {
+          id: { id: "wweb-grp-cache-2" },
+          from: "12036302482394@g.us",
+          author: "5511999998888@c.us",
+          fromMe: false,
+          timestamp: 1700000102,
+          type: "chat",
+          body: "Message 2",
+          getChat: getChatMock,
+        });
+
+        await vi.waitFor(() => {
+          expect(received.length).toBe(2);
+        });
+
+        expect(getChatMock).toHaveBeenCalledTimes(1);
+        expect(received[0].groupParticipants).toEqual(["5511999998888@s.whatsapp.net"]);
+        expect(received[1].groupParticipants).toEqual(["5511999998888@s.whatsapp.net"]);
+      } finally {
+        await driver.disconnect();
+        cleanup();
+      }
+    });
   });
 });

@@ -10,6 +10,7 @@ import { ensureSecureAuthDirectory, purgeAuthDirectory } from "./auth-utils.js";
 import {
   mapOutboundToWWebJSContent,
   mapWWebJSMessageToInbound,
+  normalizeToCanonicalJid,
   toWWebJSChatId,
   type WWebJSMessageLike,
 } from "./wwebjs-mapper.js";
@@ -28,6 +29,11 @@ export const DEFAULT_CHROMIUM_FLAGS = [
 export interface WWebJSChatInterface {
   sendStateTyping?: () => Promise<void>;
   clearState?: () => Promise<void>;
+  isGroup?: boolean;
+  participants?: Array<
+    | { id?: { _serialized?: string; user?: string } | string; _serialized?: string }
+    | string
+  >;
 }
 
 export interface WWebJSPupProcess {
@@ -144,6 +150,10 @@ export interface WWebJSDriverOptions {
    * Default: 30,000 ms.
    */
   readonly pairingQrWaitMs?: number;
+  /**
+   * Group participants cache TTL in milliseconds. Default: 300,000 ms (5 minutes).
+   */
+  readonly groupMetadataCacheTtlMs?: number;
 }
 
 interface PairingSession {
@@ -281,6 +291,9 @@ export class WWebJSDriver implements IWhatsAppDriver {
   private readonly pairingTimeoutMs: number;
   private readonly pairingPersistDelayMs: number;
   private readonly pairingQrWaitMs: number;
+  private readonly groupMetadataCacheTtlMs: number;
+  private readonly groupMetadataCache = new Map<string, { participants: string[]; expiresAt: number }>();
+  private readonly pendingGroupMetadataFetches = new Map<string, Promise<string[] | undefined>>();
 
   private pairing: PairingSession | null = null;
   private pairingStart: Promise<void> | null = null;
@@ -325,6 +338,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
     this.pairingTimeoutMs = options.pairingTimeoutMs ?? 180_000;
     this.pairingPersistDelayMs = options.pairingPersistDelayMs ?? 5000;
     this.pairingQrWaitMs = options.pairingQrWaitMs ?? 30_000;
+    this.groupMetadataCacheTtlMs = options.groupMetadataCacheTtlMs ?? 5 * 60 * 1000;
   }
 
   public getStatus(): EngineStatus {
@@ -497,6 +511,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
     this.isRecovering = false;
     this.stopHealthCheckTimer();
     this.clearRecoveryRetryTimer();
+    this.groupMetadataCache.clear();
 
     if (this.client) {
       const client = this.client;
@@ -596,6 +611,103 @@ export class WWebJSDriver implements IWhatsAppDriver {
         reaction: true,
       });
     }
+  }
+
+  public clearGroupMetadataCache(): void {
+    this.groupMetadataCache.clear();
+    this.pendingGroupMetadataFetches.clear();
+  }
+
+  public async getGroupParticipants(
+    chatId: string,
+    rawMessage?: unknown,
+  ): Promise<string[] | undefined> {
+    if (!chatId.endsWith("@g.us")) {
+      return undefined;
+    }
+
+    const cached = this.groupMetadataCache.get(chatId);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) {
+      return cached.participants;
+    }
+
+    const inFlight = this.pendingGroupMetadataFetches.get(chatId);
+    if (inFlight) {
+      return await inFlight;
+    }
+
+    const fetchPromise = this.fetchGroupParticipants(chatId, rawMessage, cached?.participants);
+    this.pendingGroupMetadataFetches.set(chatId, fetchPromise);
+    try {
+      return await fetchPromise;
+    } finally {
+      this.pendingGroupMetadataFetches.delete(chatId);
+    }
+  }
+
+  private async fetchGroupParticipants(
+    chatId: string,
+    rawMessage?: unknown,
+    staleFallback?: string[],
+  ): Promise<string[] | undefined> {
+    try {
+      let rawParticipants: unknown[] | undefined;
+
+      if (
+        rawMessage &&
+        typeof rawMessage === "object" &&
+        "getChat" in rawMessage &&
+        typeof (rawMessage as { getChat: unknown }).getChat === "function"
+      ) {
+        const chat = await (
+          rawMessage as { getChat: () => Promise<{ participants?: unknown[] }> }
+        ).getChat();
+        if (chat && Array.isArray(chat.participants)) {
+          rawParticipants = chat.participants;
+        }
+      }
+
+      if (!rawParticipants && this.client && typeof this.client.getChatById === "function") {
+        const chat = await (
+          this.client as { getChatById: (id: string) => Promise<{ participants?: unknown[] }> }
+        ).getChatById(chatId);
+        if (chat && Array.isArray(chat.participants)) {
+          rawParticipants = chat.participants;
+        }
+      }
+
+      if (rawParticipants) {
+        const participants = rawParticipants
+          .map((p) => {
+            if (typeof p === "string") return normalizeToCanonicalJid(p);
+            if (p && typeof p === "object") {
+              const obj = p as { id?: { _serialized?: string } | string; _serialized?: string };
+              if (obj.id) {
+                const idVal =
+                  typeof obj.id === "object" && obj.id !== null ? obj.id._serialized : obj.id;
+                if (idVal) return normalizeToCanonicalJid(String(idVal));
+              }
+              if (obj._serialized) {
+                return normalizeToCanonicalJid(obj._serialized);
+              }
+            }
+            return undefined;
+          })
+          .filter((id): id is string => Boolean(id));
+
+        this.groupMetadataCache.set(chatId, {
+          participants,
+          expiresAt: Date.now() + this.groupMetadataCacheTtlMs,
+        });
+
+        return participants;
+      }
+    } catch (err) {
+      this.logger.warn({ err, chatId }, "Failed to resolve group participants in WWebJS driver");
+    }
+
+    return staleFallback;
   }
 
   /**
@@ -1091,7 +1203,13 @@ export class WWebJSDriver implements IWhatsAppDriver {
       }
 
       const selfJid = client.info?.wid?._serialized;
-      const inbound = mapWWebJSMessageToInbound(rawMessage as WWebJSMessageLike, selfJid);
+      const msgObj = rawMessage as WWebJSMessageLike;
+      let groupParticipants: string[] | undefined;
+      if (msgObj.from && msgObj.from.endsWith("@g.us")) {
+        groupParticipants = await this.getGroupParticipants(msgObj.from, rawMessage);
+      }
+
+      const inbound = mapWWebJSMessageToInbound(msgObj, selfJid, groupParticipants);
       if (inbound) {
         for (const handler of this.messageHandlers) {
           try {

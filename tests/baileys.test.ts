@@ -26,13 +26,16 @@ class MockSocketEventEmitter extends EventEmitter {
   public createBufferedFunction = vi.fn();
 }
 
-function createMockSocket(): {
+function createMockSocket(options?: {
+  groupMetadataMock?: ReturnType<typeof vi.fn>;
+}): {
   sock: WASocket;
   ev: MockSocketEventEmitter;
   sendMessageMock: ReturnType<typeof vi.fn>;
   sendPresenceUpdateMock: ReturnType<typeof vi.fn>;
   uploadPreKeysMock: ReturnType<typeof vi.fn>;
   endMock: ReturnType<typeof vi.fn>;
+  groupMetadataMock: ReturnType<typeof vi.fn>;
 } {
   const ev = new MockSocketEventEmitter();
   const sendMessageMock = vi.fn().mockResolvedValue({
@@ -41,6 +44,15 @@ function createMockSocket(): {
   const sendPresenceUpdateMock = vi.fn().mockResolvedValue(undefined);
   const uploadPreKeysMock = vi.fn().mockResolvedValue(undefined);
   const endMock = vi.fn();
+  const groupMetadataMock =
+    options?.groupMetadataMock ??
+    vi.fn().mockResolvedValue({
+      id: "123456789@g.us",
+      participants: [
+        { id: "5511888888888@s.whatsapp.net" },
+        { id: "5511777777777@s.whatsapp.net" },
+      ],
+    });
 
   const sock = {
     ev: ev as unknown as WASocket["ev"],
@@ -49,10 +61,19 @@ function createMockSocket(): {
     sendPresenceUpdate: sendPresenceUpdateMock,
     uploadPreKeysToServerIfRequired: uploadPreKeysMock,
     uploadPreKeys: uploadPreKeysMock,
+    groupMetadata: groupMetadataMock,
     end: endMock,
   } as unknown as WASocket;
 
-  return { sock, ev, sendMessageMock, sendPresenceUpdateMock, uploadPreKeysMock, endMock };
+  return {
+    sock,
+    ev,
+    sendMessageMock,
+    sendPresenceUpdateMock,
+    uploadPreKeysMock,
+    endMock,
+    groupMetadataMock,
+  };
 }
 
 describe("ensureSecureAuthDirectory & purgeAuthDirectory", () => {
@@ -145,6 +166,50 @@ describe("Baileys Message Mapper", () => {
     expect(inbound?.senderJid).toBe("5511888888888@s.whatsapp.net");
     expect(inbound?.remoteJid).toBe("123456789@g.us");
     expect(inbound?.textBody).toBe("Group message text");
+  });
+
+  it("maps group message with groupParticipants when provided", () => {
+    const participants = [
+      "5511888888888@s.whatsapp.net",
+      "5511777777777@s.whatsapp.net",
+    ];
+    const inbound = mapBaileysMessageToInbound(
+      {
+        key: {
+          id: "group-msg-parts",
+          remoteJid: "123456789@g.us",
+          participant: "5511888888888@s.whatsapp.net",
+          fromMe: false,
+        },
+        messageTimestamp: 1700000010,
+        message: {
+          extendedTextMessage: {
+            text: "!sorteio",
+          },
+        },
+      },
+      undefined,
+      participants,
+    );
+
+    expect(inbound?.groupParticipants).toEqual(participants);
+  });
+
+  it("ensures direct messages do not include groupParticipants", () => {
+    const inbound = mapBaileysMessageToInbound({
+      key: {
+        id: "dm-msg-1",
+        remoteJid: "5511999999999@s.whatsapp.net",
+        fromMe: false,
+      },
+      messageTimestamp: 1700000010,
+      message: {
+        conversation: "Hello in DM",
+      },
+    });
+
+    expect(inbound?.groupParticipants).toBeUndefined();
+    expect(inbound).not.toHaveProperty("groupParticipants");
   });
 
   it("maps image message with digest and caption", () => {
@@ -1259,6 +1324,438 @@ describe("BaileysDriver", () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
 
         expect(keysSetMock).not.toHaveBeenCalled();
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("Group Metadata Caching & Resolution", () => {
+    it("enriches inbound group messages with groupParticipants from socket.groupMetadata", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-grp-"));
+      const authDir = join(tempParent, "creds");
+      const groupMetadataMock = vi.fn().mockResolvedValue({
+        id: "12036302482394@g.us",
+        participants: [
+          { id: "5511999998888@s.whatsapp.net" },
+          { id: "5511999997777@s.whatsapp.net" },
+        ],
+      });
+      const { sock, ev } = createMockSocket({ groupMetadataMock });
+
+      const driver = new BaileysDriver({
+        authDir,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: {} as AuthenticationState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      const received: InboundMessage[] = [];
+      driver.onMessage(async (msg) => {
+        received.push(msg);
+      });
+
+      try {
+        await driver.connect();
+
+        ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            {
+              key: {
+                id: "grp-msg-1",
+                remoteJid: "12036302482394@g.us",
+                participant: "5511999998888@s.whatsapp.net",
+                fromMe: false,
+              },
+              messageTimestamp: 1700000000,
+              message: {
+                conversation: "!sorteio",
+              },
+            },
+          ],
+        });
+
+        await vi.waitFor(() => {
+          expect(received.length).toBe(1);
+        });
+
+        expect(groupMetadataMock).toHaveBeenCalledWith("12036302482394@g.us");
+        expect(received[0].groupParticipants).toEqual([
+          "5511999998888@s.whatsapp.net",
+          "5511999997777@s.whatsapp.net",
+        ]);
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+
+    it("does not fetch or attach groupParticipants for direct messages (@s.whatsapp.net / @lid)", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-dm-"));
+      const authDir = join(tempParent, "creds");
+      const groupMetadataMock = vi.fn();
+      const { sock, ev } = createMockSocket({ groupMetadataMock });
+
+      const driver = new BaileysDriver({
+        authDir,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: {} as AuthenticationState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      const received: InboundMessage[] = [];
+      driver.onMessage(async (msg) => {
+        received.push(msg);
+      });
+
+      try {
+        await driver.connect();
+
+        ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            {
+              key: {
+                id: "dm-msg-1",
+                remoteJid: "5511999999999@s.whatsapp.net",
+                fromMe: false,
+              },
+              messageTimestamp: 1700000000,
+              message: {
+                conversation: "Hello in DM",
+              },
+            },
+            {
+              key: {
+                id: "lid-msg-1",
+                remoteJid: "123456789@lid",
+                fromMe: false,
+              },
+              messageTimestamp: 1700000001,
+              message: {
+                conversation: "Hello via LID",
+              },
+            },
+          ],
+        });
+
+        await vi.waitFor(() => {
+          expect(received.length).toBe(2);
+        });
+
+        expect(groupMetadataMock).not.toHaveBeenCalled();
+        expect(received[0].groupParticipants).toBeUndefined();
+        expect(received[1].groupParticipants).toBeUndefined();
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+
+    it("prevents duplicate socket metadata queries within the cache TTL window", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-cache-"));
+      const authDir = join(tempParent, "creds");
+      const groupMetadataMock = vi.fn().mockResolvedValue({
+        id: "12036302482394@g.us",
+        participants: [{ id: "5511999998888@s.whatsapp.net" }],
+      });
+      const { sock, ev } = createMockSocket({ groupMetadataMock });
+
+      const driver = new BaileysDriver({
+        authDir,
+        groupMetadataCacheTtlMs: 5000,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: {} as AuthenticationState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      const received: InboundMessage[] = [];
+      driver.onMessage(async (msg) => {
+        received.push(msg);
+      });
+
+      try {
+        await driver.connect();
+
+        // Message 1
+        ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            {
+              key: {
+                id: "grp-msg-1",
+                remoteJid: "12036302482394@g.us",
+                participant: "5511999998888@s.whatsapp.net",
+                fromMe: false,
+              },
+              messageTimestamp: 1700000000,
+              message: { conversation: "First message" },
+            },
+          ],
+        });
+
+        // Message 2 immediately after
+        ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            {
+              key: {
+                id: "grp-msg-2",
+                remoteJid: "12036302482394@g.us",
+                participant: "5511999998888@s.whatsapp.net",
+                fromMe: false,
+              },
+              messageTimestamp: 1700000002,
+              message: { conversation: "Second message" },
+            },
+          ],
+        });
+
+        await vi.waitFor(() => {
+          expect(received.length).toBe(2);
+        });
+
+        expect(groupMetadataMock).toHaveBeenCalledTimes(1);
+        expect(received[0].groupParticipants).toEqual(["5511999998888@s.whatsapp.net"]);
+        expect(received[1].groupParticipants).toEqual(["5511999998888@s.whatsapp.net"]);
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+
+    it("refetches group metadata after cache TTL expiration", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-expire-"));
+      const authDir = join(tempParent, "creds");
+      const groupMetadataMock = vi.fn().mockResolvedValue({
+        id: "12036302482394@g.us",
+        participants: [{ id: "5511999998888@s.whatsapp.net" }],
+      });
+      const { sock, ev } = createMockSocket({ groupMetadataMock });
+
+      const driver = new BaileysDriver({
+        authDir,
+        groupMetadataCacheTtlMs: 30, // Short 30ms TTL
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: {} as AuthenticationState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      const received: InboundMessage[] = [];
+      driver.onMessage(async (msg) => {
+        received.push(msg);
+      });
+
+      try {
+        await driver.connect();
+
+        ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            {
+              key: {
+                id: "grp-msg-1",
+                remoteJid: "12036302482394@g.us",
+                participant: "5511999998888@s.whatsapp.net",
+                fromMe: false,
+              },
+              messageTimestamp: 1700000000,
+              message: { conversation: "First message" },
+            },
+          ],
+        });
+
+        await vi.waitFor(() => {
+          expect(received.length).toBe(1);
+        });
+        expect(groupMetadataMock).toHaveBeenCalledTimes(1);
+
+        // Wait past 30ms TTL
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            {
+              key: {
+                id: "grp-msg-2",
+                remoteJid: "12036302482394@g.us",
+                participant: "5511999998888@s.whatsapp.net",
+                fromMe: false,
+              },
+              messageTimestamp: 1700000005,
+              message: { conversation: "Second message after TTL" },
+            },
+          ],
+        });
+
+        await vi.waitFor(() => {
+          expect(received.length).toBe(2);
+        });
+
+        expect(groupMetadataMock).toHaveBeenCalledTimes(2);
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+
+    it("gracefully swallows socket errors when fetching group metadata without crashing or stalling messages.upsert", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-err-"));
+      const authDir = join(tempParent, "creds");
+      const groupMetadataMock = vi.fn().mockRejectedValue(new Error("Rate limited: status 429"));
+      const { sock, ev } = createMockSocket({ groupMetadataMock });
+
+      const driver = new BaileysDriver({
+        authDir,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: {} as AuthenticationState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      const received: InboundMessage[] = [];
+      driver.onMessage(async (msg) => {
+        received.push(msg);
+      });
+
+      try {
+        await driver.connect();
+
+        ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            {
+              key: {
+                id: "grp-msg-fail",
+                remoteJid: "12036302482394@g.us",
+                participant: "5511999998888@s.whatsapp.net",
+                fromMe: false,
+              },
+              messageTimestamp: 1700000000,
+              message: { conversation: "!sorteio" },
+            },
+          ],
+        });
+
+        await vi.waitFor(() => {
+          expect(received.length).toBe(1);
+        });
+
+        expect(groupMetadataMock).toHaveBeenCalledWith("12036302482394@g.us");
+        expect(received[0].id).toBe("grp-msg-fail");
+        expect(received[0].groupParticipants).toBeUndefined();
+      } finally {
+        await driver.disconnect();
+        rmSync(tempParent, { recursive: true, force: true });
+      }
+    });
+
+    it("falls back to stale cached participants when socket query fails on refresh", async () => {
+      const tempParent = mkdtempSync(join(tmpdir(), "auth-baileys-stale-"));
+      const authDir = join(tempParent, "creds");
+      let callCount = 0;
+      const groupMetadataMock = vi.fn().mockImplementation(async () => {
+        callCount += 1;
+        if (callCount === 1) {
+          return {
+            id: "12036302482394@g.us",
+            participants: [{ id: "5511888888888@s.whatsapp.net" }],
+          };
+        }
+        throw new Error("Socket disconnected unexpectedly");
+      });
+      const { sock, ev } = createMockSocket({ groupMetadataMock });
+
+      const driver = new BaileysDriver({
+        authDir,
+        groupMetadataCacheTtlMs: 25,
+        authStateLoader: vi.fn().mockResolvedValue({
+          state: {} as AuthenticationState,
+          saveCreds: vi.fn(),
+        }),
+        socketFactory: vi.fn().mockReturnValue(sock) as unknown as (
+          config: UserFacingSocketConfig,
+        ) => WASocket,
+      });
+
+      const received: InboundMessage[] = [];
+      driver.onMessage(async (msg) => {
+        received.push(msg);
+      });
+
+      try {
+        await driver.connect();
+
+        // 1. Initial success - caches participants
+        ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            {
+              key: {
+                id: "msg-1",
+                remoteJid: "12036302482394@g.us",
+                participant: "5511888888888@s.whatsapp.net",
+                fromMe: false,
+              },
+              messageTimestamp: 1700000000,
+              message: { conversation: "msg 1" },
+            },
+          ],
+        });
+
+        await vi.waitFor(() => {
+          expect(received.length).toBe(1);
+        });
+        expect(received[0].groupParticipants).toEqual(["5511888888888@s.whatsapp.net"]);
+
+        // Wait past TTL
+        await new Promise((resolve) => setTimeout(resolve, 40));
+
+        // 2. Next message after TTL - socket throws, falls back to stale cache
+        ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            {
+              key: {
+                id: "msg-2",
+                remoteJid: "12036302482394@g.us",
+                participant: "5511888888888@s.whatsapp.net",
+                fromMe: false,
+              },
+              messageTimestamp: 1700000010,
+              message: { conversation: "msg 2" },
+            },
+          ],
+        });
+
+        await vi.waitFor(() => {
+          expect(received.length).toBe(2);
+        });
+        expect(callCount).toBe(2);
+        // Stale cached data preserved!
+        expect(received[1].groupParticipants).toEqual(["5511888888888@s.whatsapp.net"]);
       } finally {
         await driver.disconnect();
         rmSync(tempParent, { recursive: true, force: true });

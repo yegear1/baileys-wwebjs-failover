@@ -22,6 +22,33 @@ describe("Message Contracts & Schemas", () => {
     expect(parsed.id).toBe(raw.id);
     expect(parsed.type).toBe("text");
     expect(parsed.textBody).toBe("Hello from WhatsApp");
+    expect(parsed.groupParticipants).toBeUndefined();
+  });
+
+  it("validates an inbound group message with groupParticipants list", () => {
+    const raw = {
+      id: "3EB0GROUP123",
+      remoteJid: "12036302482394@g.us",
+      senderJid: "5511888888888@s.whatsapp.net",
+      fromMe: false,
+      timestamp: 1700000000,
+      type: "text",
+      textBody: "!sorteio",
+      dedupHash: "b".repeat(64),
+      groupParticipants: [
+        "5511888888888@s.whatsapp.net",
+        "5511777777777@s.whatsapp.net",
+        "5511666666666@s.whatsapp.net",
+      ],
+    };
+
+    const parsed = InboundMessageSchema.parse(raw);
+    expect(parsed.id).toBe(raw.id);
+    expect(parsed.groupParticipants).toEqual([
+      "5511888888888@s.whatsapp.net",
+      "5511777777777@s.whatsapp.net",
+      "5511666666666@s.whatsapp.net",
+    ]);
   });
 
   it("validates an inbound media message with attachment metadata", () => {

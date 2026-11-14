@@ -35,6 +35,7 @@ export const InboundMessageSchema = z.object({
   media: MediaAttachmentSchema.optional(),
   dedupHash: z.string().min(1),
   raw: z.record(z.unknown()).optional(),
+  groupParticipants: z.array(z.string()).optional(),
 });
 export type InboundMessage = z.infer<typeof InboundMessageSchema>;
 
