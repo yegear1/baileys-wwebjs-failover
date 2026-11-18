@@ -43,7 +43,10 @@ export interface WWebJSMessageLike {
   readonly getChat?: () => Promise<{
     readonly isGroup?: boolean;
     readonly participants?: Array<
-      | { readonly id?: { readonly _serialized?: string; readonly user?: string } | string; readonly _serialized?: string }
+      | {
+          readonly id?: { readonly _serialized?: string; readonly user?: string } | string;
+          readonly _serialized?: string;
+        }
       | string
     >;
   }>;

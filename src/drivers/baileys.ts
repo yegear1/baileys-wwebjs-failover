@@ -207,7 +207,10 @@ export class BaileysDriver implements IWhatsAppDriver {
   private readonly messageStore = new Map<string, { message: proto.IMessage; remoteJid: string }>();
   private readonly groupMetadataCacheTtlMs: number;
   private readonly groupMetadataTimeoutMs: number;
-  private readonly groupMetadataCache = new Map<string, { participants: string[]; expiresAt: number }>();
+  private readonly groupMetadataCache = new Map<
+    string,
+    { participants: string[]; expiresAt: number }
+  >();
   private readonly pendingGroupMetadataFetches = new Map<string, Promise<string[] | undefined>>();
 
   private socket: WASocket | null = null;
@@ -856,7 +859,7 @@ export class BaileysDriver implements IWhatsAppDriver {
 
       const remoteJid = webMsg.key?.remoteJid;
       let groupParticipants: string[] | undefined;
-      if (remoteJid && remoteJid.endsWith("@g.us")) {
+      if (remoteJid?.endsWith("@g.us")) {
         groupParticipants = await this.getGroupParticipants(remoteJid);
       }
 

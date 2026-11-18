@@ -31,8 +31,7 @@ export interface WWebJSChatInterface {
   clearState?: () => Promise<void>;
   isGroup?: boolean;
   participants?: Array<
-    | { id?: { _serialized?: string; user?: string } | string; _serialized?: string }
-    | string
+    { id?: { _serialized?: string; user?: string } | string; _serialized?: string } | string
   >;
 }
 
@@ -292,7 +291,10 @@ export class WWebJSDriver implements IWhatsAppDriver {
   private readonly pairingPersistDelayMs: number;
   private readonly pairingQrWaitMs: number;
   private readonly groupMetadataCacheTtlMs: number;
-  private readonly groupMetadataCache = new Map<string, { participants: string[]; expiresAt: number }>();
+  private readonly groupMetadataCache = new Map<
+    string,
+    { participants: string[]; expiresAt: number }
+  >();
   private readonly pendingGroupMetadataFetches = new Map<string, Promise<string[] | undefined>>();
 
   private pairing: PairingSession | null = null;
@@ -1205,7 +1207,7 @@ export class WWebJSDriver implements IWhatsAppDriver {
       const selfJid = client.info?.wid?._serialized;
       const msgObj = rawMessage as WWebJSMessageLike;
       let groupParticipants: string[] | undefined;
-      if (msgObj.from && msgObj.from.endsWith("@g.us")) {
+      if (msgObj.from?.endsWith("@g.us")) {
         groupParticipants = await this.getGroupParticipants(msgObj.from, rawMessage);
       }
 

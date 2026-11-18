@@ -210,10 +210,7 @@ describe("WWebJS Message Mapper", () => {
   });
 
   it("maps group chat message with groupParticipants when provided", () => {
-    const participants = [
-      "5511777777777@s.whatsapp.net",
-      "5511888888888@s.whatsapp.net",
-    ];
+    const participants = ["5511777777777@s.whatsapp.net", "5511888888888@s.whatsapp.net"];
     const inbound = mapWWebJSMessageToInbound(
       {
         id: { id: "grp-002" },
@@ -762,7 +759,7 @@ describe("Container Process Hygiene & Teardown", () => {
         });
 
         expect(getChatMock).toHaveBeenCalled();
-        expect(received[0].groupParticipants).toEqual([
+        expect(received[0]?.groupParticipants).toEqual([
           "5511999998888@s.whatsapp.net",
           "5511999997777@s.whatsapp.net",
         ]);
@@ -798,7 +795,7 @@ describe("Container Process Hygiene & Teardown", () => {
         });
 
         expect(getChatMock).not.toHaveBeenCalled();
-        expect(received[0].groupParticipants).toBeUndefined();
+        expect(received[0]?.groupParticipants).toBeUndefined();
       } finally {
         await driver.disconnect();
         cleanup();
@@ -849,8 +846,8 @@ describe("Container Process Hygiene & Teardown", () => {
         });
 
         expect(getChatMock).toHaveBeenCalledTimes(1);
-        expect(received[0].groupParticipants).toEqual(["5511999998888@s.whatsapp.net"]);
-        expect(received[1].groupParticipants).toEqual(["5511999998888@s.whatsapp.net"]);
+        expect(received[0]?.groupParticipants).toEqual(["5511999998888@s.whatsapp.net"]);
+        expect(received[1]?.groupParticipants).toEqual(["5511999998888@s.whatsapp.net"]);
       } finally {
         await driver.disconnect();
         cleanup();

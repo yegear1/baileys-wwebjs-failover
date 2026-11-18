@@ -14,6 +14,7 @@ import {
   BaileysSendTimeoutError,
   BoundedRetryCounterCache,
   ensureSecureAuthDirectory,
+  type InboundMessage,
   mapBaileysMessageToInbound,
   mapOutboundToBaileysContent,
   purgeAuthDirectory,
@@ -26,9 +27,7 @@ class MockSocketEventEmitter extends EventEmitter {
   public createBufferedFunction = vi.fn();
 }
 
-function createMockSocket(options?: {
-  groupMetadataMock?: ReturnType<typeof vi.fn>;
-}): {
+function createMockSocket(options?: { groupMetadataMock?: ReturnType<typeof vi.fn> }): {
   sock: WASocket;
   ev: MockSocketEventEmitter;
   sendMessageMock: ReturnType<typeof vi.fn>;
@@ -169,10 +168,7 @@ describe("Baileys Message Mapper", () => {
   });
 
   it("maps group message with groupParticipants when provided", () => {
-    const participants = [
-      "5511888888888@s.whatsapp.net",
-      "5511777777777@s.whatsapp.net",
-    ];
+    const participants = ["5511888888888@s.whatsapp.net", "5511777777777@s.whatsapp.net"];
     const inbound = mapBaileysMessageToInbound(
       {
         key: {
@@ -1386,7 +1382,7 @@ describe("BaileysDriver", () => {
         });
 
         expect(groupMetadataMock).toHaveBeenCalledWith("12036302482394@g.us");
-        expect(received[0].groupParticipants).toEqual([
+        expect(received[0]?.groupParticipants).toEqual([
           "5511999998888@s.whatsapp.net",
           "5511999997777@s.whatsapp.net",
         ]);
@@ -1454,8 +1450,8 @@ describe("BaileysDriver", () => {
         });
 
         expect(groupMetadataMock).not.toHaveBeenCalled();
-        expect(received[0].groupParticipants).toBeUndefined();
-        expect(received[1].groupParticipants).toBeUndefined();
+        expect(received[0]?.groupParticipants).toBeUndefined();
+        expect(received[1]?.groupParticipants).toBeUndefined();
       } finally {
         await driver.disconnect();
         rmSync(tempParent, { recursive: true, force: true });
@@ -1530,8 +1526,8 @@ describe("BaileysDriver", () => {
         });
 
         expect(groupMetadataMock).toHaveBeenCalledTimes(1);
-        expect(received[0].groupParticipants).toEqual(["5511999998888@s.whatsapp.net"]);
-        expect(received[1].groupParticipants).toEqual(["5511999998888@s.whatsapp.net"]);
+        expect(received[0]?.groupParticipants).toEqual(["5511999998888@s.whatsapp.net"]);
+        expect(received[1]?.groupParticipants).toEqual(["5511999998888@s.whatsapp.net"]);
       } finally {
         await driver.disconnect();
         rmSync(tempParent, { recursive: true, force: true });
@@ -1664,8 +1660,8 @@ describe("BaileysDriver", () => {
         });
 
         expect(groupMetadataMock).toHaveBeenCalledWith("12036302482394@g.us");
-        expect(received[0].id).toBe("grp-msg-fail");
-        expect(received[0].groupParticipants).toBeUndefined();
+        expect(received[0]?.id).toBe("grp-msg-fail");
+        expect(received[0]?.groupParticipants).toBeUndefined();
       } finally {
         await driver.disconnect();
         rmSync(tempParent, { recursive: true, force: true });
@@ -1728,7 +1724,7 @@ describe("BaileysDriver", () => {
         await vi.waitFor(() => {
           expect(received.length).toBe(1);
         });
-        expect(received[0].groupParticipants).toEqual(["5511888888888@s.whatsapp.net"]);
+        expect(received[0]?.groupParticipants).toEqual(["5511888888888@s.whatsapp.net"]);
 
         // Wait past TTL
         await new Promise((resolve) => setTimeout(resolve, 40));
@@ -1755,7 +1751,7 @@ describe("BaileysDriver", () => {
         });
         expect(callCount).toBe(2);
         // Stale cached data preserved!
-        expect(received[1].groupParticipants).toEqual(["5511888888888@s.whatsapp.net"]);
+        expect(received[1]?.groupParticipants).toEqual(["5511888888888@s.whatsapp.net"]);
       } finally {
         await driver.disconnect();
         rmSync(tempParent, { recursive: true, force: true });
