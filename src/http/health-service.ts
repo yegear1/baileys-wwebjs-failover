@@ -31,6 +31,10 @@ export class HealthService {
   public getHealth(): HealthResponsePayload {
     const fsmState = this.orchestrator.getState();
     const activeEngine = this.orchestrator.getActiveEngine();
+    const gatewayMode =
+      typeof this.orchestrator.getGatewayMode === "function"
+        ? this.orchestrator.getGatewayMode()
+        : "failover";
     const primaryStatus = this.primaryDriver.getStatus();
     const standbyStatus = this.standbyDriver.getStatus();
     const queueStatus = this.queueManager?.getStatus();
@@ -46,6 +50,7 @@ export class HealthService {
       status,
       active_engine: activeEngine,
       fsm_state: fsmState,
+      gateway_mode: gatewayMode,
       primary: primaryStatus,
       standby: standbyStatus,
       ...(queueStatus ? { queues: queueStatus } : {}),

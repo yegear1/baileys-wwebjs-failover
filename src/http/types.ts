@@ -1,3 +1,4 @@
+import type { GatewayMode } from "../bootstrap/config.js";
 import type {
   EngineName,
   EngineState,
@@ -15,6 +16,7 @@ export interface HealthResponsePayload {
   readonly status: HealthStatus;
   readonly active_engine: EngineName | null;
   readonly fsm_state?: FailoverState | undefined;
+  readonly gateway_mode?: GatewayMode | undefined;
   readonly primary: EngineStatus;
   readonly standby: EngineStatus;
   readonly queues?: QueueManagerStatus | undefined;

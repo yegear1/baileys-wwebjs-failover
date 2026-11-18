@@ -1,0 +1,82 @@
+groups:
+  - name: baileys-wwebjs-failover
+    rules:
+      - alert: GatewayDown
+        expr: gateway_health_status{status="down"} == 1 or up{job="baileys-wwebjs-failover"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: baileys-wwebjs-failover
+        annotations:
+          summary: "WhatsApp gateway is down ({{ $labels.instance }})"
+          description: "Both primary (Baileys) and standby (WWebJS) engines are disconnected or /metrics scrape is unreachable for >1m."
+
+      - alert: GatewayFallbackActive
+        expr: fsm_state{state="FALLBACK_ACTIVE"} == 1
+        for: 2m
+        labels:
+          severity: warning
+          service: baileys-wwebjs-failover
+        annotations:
+          summary: "Gateway operating in WWebJS fallback mode"
+          description: "FailoverOrchestrator has remained in FALLBACK_ACTIVE for >2m; Chromium standby is serving traffic while Baileys probes recovery."
+
+      - alert: GatewayFailoverFlapping
+        expr: increase(failover_events_total[15m]) >= 3
+        for: 0m
+        labels:
+          severity: critical
+          service: baileys-wwebjs-failover
+        annotations:
+          summary: "Frequent WhatsApp engine failovers detected"
+          description: "failover_events_total increased by >= 3 within 15 minutes, indicating unstable primary connectivity or flapping."
+
+      - alert: GatewayDeadLetterQueueNonEmpty
+        expr: queue_length{queue="dlq"} > 0 or increase(dlq_messages_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: baileys-wwebjs-failover
+        annotations:
+          summary: "Messages routed to outbound Dead Letter Queue (DLQ)"
+          description: "queue_length{queue=\"dlq\"}={{ $value }}. Inspect VictoriaLogs for retry exhaustion or malformed outbound payloads."
+
+      - alert: GatewayOutboundQueueBacklog
+        expr: queue_length{queue="outbound"} > 50 or outbound_buffer_depth > 25
+        for: 3m
+        labels:
+          severity: warning
+          service: baileys-wwebjs-failover
+        annotations:
+          summary: "Outbound priority queue or transition buffer backlog growing"
+          description: "Outbound queue or in-memory buffer depth stayed elevated for >3m. Check engine dispatch latency or transition stalls."
+
+      - alert: GatewayChromiumRestartLoop
+        expr: increase(chromium_restarts_total[15m]) >= 3
+        for: 0m
+        labels:
+          severity: critical
+          service: baileys-wwebjs-failover
+        annotations:
+          summary: "Standby Chromium restarting repeatedly"
+          description: "chromium_restarts_total increased >= 3 times in 15m. Verify shm_size >= 2gb and container memory limits."
+
+      - alert: GatewayCircuitBreakerNearTrip
+        expr: circuit_breaker_consecutive_failures >= 2
+        for: 1m
+        labels:
+          severity: warning
+          service: baileys-wwebjs-failover
+        annotations:
+          summary: "Primary Baileys circuit breaker approaching failure threshold"
+          description: "circuit_breaker_consecutive_failures={{ $value }}. Primary send failures may trigger failover."
+
+      - alert: GatewayOutboundErrorSpike
+        expr: increase(messages_outbound_errors_total[5m]) >= 5 or increase(messages_react_errors_total[5m]) >= 5
+        for: 1m
+        labels:
+          severity: warning
+          service: baileys-wwebjs-failover
+        annotations:
+          summary: "Elevated outbound or reaction processing errors"
+          description: "Worker error counters spiked in the last 5 minutes. Inspect VictoriaLogs for schema or upstream errors."

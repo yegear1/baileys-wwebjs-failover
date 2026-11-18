@@ -137,12 +137,17 @@ docker compose up -d
 curl -s http://127.0.0.1:3000/health
 curl -s http://127.0.0.1:3000/metrics
 
+# Run automated post-deploy rollout verification
+pnpm build && pnpm verify:rollout -- --url http://127.0.0.1:3000
+
 # Manually fail back to Baileys (202 on success, 409 if primary is disconnected or no fallback is active)
 curl -s -X POST http://127.0.0.1:3000/failback
 
 # Follow gateway logs
 docker compose logs -f gateway
 ```
+
+Observability dashboards, Prometheus alert rules, VictoriaLogs LogsQL queries, and the production rollout runbook are documented in [`docs/observability/`](docs/observability/rollout-verification.md).
 
 ## Development
 
@@ -152,6 +157,7 @@ pnpm test             # Run test suite
 pnpm lint             # Run linter and formatting checks
 pnpm typecheck        # Strict TypeScript type check
 pnpm build            # Build project for production
+pnpm verify:rollout   # Verify live gateway /health, /metrics, and /qr/* endpoints
 ```
 
 ## License

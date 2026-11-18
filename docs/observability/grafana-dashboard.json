@@ -1,0 +1,186 @@
+{
+  "title": "baileys-wwebjs-failover — Operational Overview",
+  "uid": "baileys-wwebjs-failover-ops",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "tags": ["whatsapp", "gateway", "failover"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Gateway Health Status",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "gateway_health_status",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Active FSM State",
+      "type": "stat",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "fsm_state == 1",
+          "legendFormat": "{{state}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Engine Connectivity",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "engine_status",
+          "legendFormat": "{{engine}} ({{role}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Gateway Mode & Uptime (s)",
+      "type": "stat",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "gateway_uptime_seconds",
+          "legendFormat": "uptime_s",
+          "refId": "A"
+        },
+        {
+          "expr": "gateway_mode == 1",
+          "legendFormat": "mode={{mode}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Redis Queue Depths",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "queue_length",
+          "legendFormat": "{{queue}}",
+          "refId": "A"
+        },
+        {
+          "expr": "outbound_buffer_depth",
+          "legendFormat": "in_memory_buffer",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Engine Dispatch Latency (seconds)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "engine_latency_seconds",
+          "legendFormat": "{{engine}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Message Throughput & Deduplication Rate",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 11, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "rate(messages_inbound_published_total[5m])",
+          "legendFormat": "inbound_published/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(messages_inbound_duplicate_total[5m])",
+          "legendFormat": "inbound_duplicates/s",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(messages_processed_total[5m])",
+          "legendFormat": "outbound_processed/s",
+          "refId": "C"
+        },
+        {
+          "expr": "rate(messages_react_processed_total[5m])",
+          "legendFormat": "react_processed/s",
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Failovers, Circuit Breaker & DLQ Counters",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 11, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "failover_events_total",
+          "legendFormat": "failover_events_total",
+          "refId": "A"
+        },
+        {
+          "expr": "failback_events_total",
+          "legendFormat": "failback_events_total",
+          "refId": "B"
+        },
+        {
+          "expr": "circuit_breaker_consecutive_failures",
+          "legendFormat": "breaker_failures",
+          "refId": "C"
+        },
+        {
+          "expr": "chromium_restarts_total",
+          "legendFormat": "chromium_restarts_total",
+          "refId": "D"
+        },
+        {
+          "expr": "dlq_messages_total",
+          "legendFormat": "dlq_messages_total",
+          "refId": "E"
+        },
+        {
+          "expr": "messages_requeued_total",
+          "legendFormat": "messages_requeued_total",
+          "refId": "F"
+        }
+      ]
+    }
+  ]
+}

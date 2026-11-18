@@ -1,3 +1,4 @@
+import type { GatewayMode } from "../bootstrap/config.js";
 import type { IWhatsAppDriver } from "../contracts/driver.js";
 import type { FailoverOrchestrator } from "../fsm/orchestrator.js";
 import type { FailoverState } from "../fsm/types.js";
@@ -24,6 +25,7 @@ const ALL_FSM_STATES: readonly FailoverState[] = [
 ];
 
 const ALL_HEALTH_STATUSES: readonly HealthStatus[] = ["ok", "degraded", "down"];
+const ALL_GATEWAY_MODES: readonly GatewayMode[] = ["failover", "baileys_only"];
 
 /**
  * Service generating and formatting real-time Prometheus exposition metrics.
@@ -58,6 +60,21 @@ export class MetricsService {
   }
 
   private appendHealthMetrics(lines: string[]): void {
+    const gatewayMode =
+      typeof this.orchestrator.getGatewayMode === "function"
+        ? this.orchestrator.getGatewayMode()
+        : "failover";
+
+    lines.push("# HELP gateway_mode Configured gateway operation mode (1 = active, 0 = inactive).");
+    lines.push("# TYPE gateway_mode gauge");
+    for (const mode of ALL_GATEWAY_MODES) {
+      lines.push(`gateway_mode{mode="${mode}"} ${gatewayMode === mode ? 1 : 0}`);
+    }
+
+    lines.push("# HELP gateway_uptime_seconds Process uptime in seconds.");
+    lines.push("# TYPE gateway_uptime_seconds gauge");
+    lines.push(`gateway_uptime_seconds ${Math.floor(process.uptime())}`);
+
     if (!this.healthService) return;
 
     const health = this.healthService.getHealth();
@@ -144,10 +161,21 @@ export class MetricsService {
 
   private async appendQueueMetrics(lines: string[]): Promise<void> {
     const queueStatus = this.queueManager?.getStatus();
-    let queueLengths = { inbox: 0, outbound: 0, outboundLow: 0, dlq: 0 };
+    let queueLengths: {
+      inbox: number;
+      outbound: number;
+      notifications?: number | undefined;
+      outboundLow?: number | undefined;
+      react?: number | undefined;
+      dlq: number;
+    } = { inbox: 0, outbound: 0, notifications: 0, outboundLow: 0, react: 0, dlq: 0 };
 
     if (this.queueManager && typeof this.queueManager.getQueueLengths === "function") {
-      queueLengths = await this.queueManager.getQueueLengths();
+      try {
+        queueLengths = await this.queueManager.getQueueLengths();
+      } catch {
+        // INVARIANT: Metrics scrape must never throw 500 when Redis is transiently unreachable
+      }
     }
 
     lines.push(
@@ -156,7 +184,9 @@ export class MetricsService {
     lines.push("# TYPE queue_length gauge");
     lines.push(`queue_length{queue="inbox"} ${queueLengths.inbox}`);
     lines.push(`queue_length{queue="outbound"} ${queueLengths.outbound}`);
+    lines.push(`queue_length{queue="notifications"} ${queueLengths.notifications ?? 0}`);
     lines.push(`queue_length{queue="outbound_low"} ${queueLengths.outboundLow ?? 0}`);
+    lines.push(`queue_length{queue="react"} ${queueLengths.react ?? 0}`);
     lines.push(`queue_length{queue="dlq"} ${queueLengths.dlq}`);
 
     const dlqTotal = queueStatus?.worker.dlqCount ?? 0;
@@ -170,6 +200,13 @@ export class MetricsService {
     lines.push("# HELP messages_processed_total Total number of outbound messages processed.");
     lines.push("# TYPE messages_processed_total counter");
     lines.push(`messages_processed_total ${processedTotal}`);
+
+    const outboundErrorsTotal = queueStatus?.worker.errorCount ?? 0;
+    lines.push(
+      "# HELP messages_outbound_errors_total Total number of outbound dispatch or validation errors.",
+    );
+    lines.push("# TYPE messages_outbound_errors_total counter");
+    lines.push(`messages_outbound_errors_total ${outboundErrorsTotal}`);
 
     const requeuedTotal = queueStatus?.worker.requeuedCount ?? 0;
     lines.push(
@@ -191,5 +228,17 @@ export class MetricsService {
     );
     lines.push("# TYPE messages_inbound_duplicate_total counter");
     lines.push(`messages_inbound_duplicate_total ${duplicateTotal}`);
+
+    const reactProcessedTotal = queueStatus?.react.processedCount ?? 0;
+    lines.push("# HELP messages_react_processed_total Total number of emoji reactions processed.");
+    lines.push("# TYPE messages_react_processed_total counter");
+    lines.push(`messages_react_processed_total ${reactProcessedTotal}`);
+
+    const reactErrorsTotal = queueStatus?.react.errorCount ?? 0;
+    lines.push(
+      "# HELP messages_react_errors_total Total number of emoji reaction processing errors.",
+    );
+    lines.push("# TYPE messages_react_errors_total counter");
+    lines.push(`messages_react_errors_total ${reactErrorsTotal}`);
   }
 }

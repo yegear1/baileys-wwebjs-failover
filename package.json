@@ -9,7 +9,8 @@
     "lint": "biome check src tests",
     "format": "biome format --write src tests",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:rollout": "node dist/observability/rollout-verifier.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.24",
