@@ -34,3 +34,8 @@ Thumbs.db
 
 # Agent & worktree ephemeral scratch
 .worktrees/
+
+# Agent & dev-harness ephemeral state
+.harness/queue/done/
+.harness/queue/escalated/
+.harness/worktrees/
